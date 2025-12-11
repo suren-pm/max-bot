@@ -10,6 +10,7 @@ import { sleep } from '../utils/sleep'
 import { createStateDetector } from '../utils/meeting-state-detector'
 import { TEAMS_STATE_CONFIG } from './teams-state-config'
 import { formatError } from '../utils/Logger'
+import { enableTeamsAudioCapture, verifyTeamsAudioCapture } from './teams/audio-capture'
 
 // Create a singleton detector instance for Microsoft Teams
 const teamsStateDetector = createStateDetector(TEAMS_STATE_CONFIG)
@@ -46,6 +47,19 @@ export class TeamsProvider implements MeetingProviderInterface {
         await browserContext.grantPermissions(['microphone', 'camera'], {
             origin: url.origin,
         })
+
+        // Enable Web Audio mixing for clean streaming (KISS approach!)
+        // Check config directly, not Streaming.instance (which may not be instantiated yet)
+        if (GLOBAL.get().streaming_output) {
+            try {
+                await enableTeamsAudioCapture(page)
+                console.log('[Teams] ✅ Web Audio capture enabled for streaming')
+            } catch (error) {
+                console.error('[Teams] Failed to enable audio capture, continuing without it:', formatError(error))
+            }
+        } else {
+            console.log('[Teams] ℹ️ Streaming not configured, skipping audio capture setup')
+        }
 
         try {
             await page.goto(link, {
@@ -393,6 +407,15 @@ export class TeamsProvider implements MeetingProviderInterface {
 
         // Capture DOM state after successfully joining Teams meeting
         await htmlSnapshot.captureSnapshot(page, 'teams_join_meeting_success')
+
+        // Verify audio capture is working (only if streaming is enabled)
+        if (GLOBAL.get().streaming_output) {
+            try {
+                await verifyTeamsAudioCapture(page)
+            } catch (error) {
+                console.error('[Teams] Failed to verify audio capture post-join:', formatError(error))
+            }
+        }
 
         // Check for "Continue without audio or video" that might appear AFTER joining (light interface)
         try {

@@ -11,6 +11,7 @@ import { formatError } from '../utils/Logger'
 import { closeMeeting } from './meet/closeMeeting'
 import { createStateDetector } from '../utils/meeting-state-detector'
 import { MEET_STATE_CONFIG } from './meet-state-config'
+import { enableMeetAudioCapture, verifyMeetAudioCapture } from './meet/audio-capture'
 
 // Create a singleton detector instance for Google Meet
 const meetStateDetector = createStateDetector(MEET_STATE_CONFIG)
@@ -44,6 +45,13 @@ export class MeetProvider implements MeetingProviderInterface {
                 await browserContext.grantPermissions(['microphone', 'camera'])
             } else {
                 await browserContext.grantPermissions(['camera'])
+            }
+
+            // Enable Web Audio mixing for streaming
+            // Check config directly, not Streaming.instance (which may not be instantiated yet)
+            if (GLOBAL.get().streaming_output) {
+                await enableMeetAudioCapture(page)
+                console.log('[Meet] ✅ Web Audio capture enabled for streaming')
             }
 
             console.log(`Navigating to ${link}...`)
@@ -225,6 +233,15 @@ export class MeetProvider implements MeetingProviderInterface {
                 page,
                 'meet_join_meeting_success',
             )
+
+            // Verify audio capture is working post-join (matches Teams behavior)
+            if (GLOBAL.get().streaming_output) {
+                try {
+                    await verifyMeetAudioCapture(page)
+                } catch (error) {
+                    console.error('[Meet] Failed to verify audio capture post-join:', formatError(error))
+                }
+            }
 
             if (GLOBAL.get().enter_message) {
                 console.log('Sending entry message...')

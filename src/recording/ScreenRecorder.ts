@@ -10,6 +10,7 @@ import { MeetingEndReason } from '../state-machine/types'
 
 import { HtmlSnapshotService } from '../services/html-snapshot-service'
 import { calculateVideoOffset } from '../utils/CalculVideoOffset'
+import { formatError } from '../utils/Logger'
 import { PathManager } from '../utils/PathManager'
 import { S3Uploader } from '../utils/S3Uploader'
 import { sleep } from '../utils/sleep'
@@ -144,7 +145,7 @@ export class ScreenRecorder extends EventEmitter {
                     PathManager.getInstance().getOutputPath() + '.wav'
             }
         } catch (error) {
-            console.error('Failed to generate output paths:', error)
+            console.error('Failed to generate output paths:', formatError(error))
             throw new Error('Failed to generate output paths')
         }
     }
@@ -197,7 +198,7 @@ export class ScreenRecorder extends EventEmitter {
                 isAudioOnly: GLOBAL.get().recording_mode === 'audio_only',
             })
         } catch (error) {
-            console.error('Failed to start native recording:', error)
+            console.error('Failed to start native recording:', formatError(error))
             this.isRecording = false
             this.emit('error', { type: 'startError', error })
         }
@@ -282,7 +283,7 @@ export class ScreenRecorder extends EventEmitter {
                 return
             }
         } catch (error) {
-            console.error('❌ FFmpeg audio test failed:', error)
+            console.error('❌ FFmpeg audio test failed:', formatError(error))
         }
 
         throw new Error(
@@ -315,7 +316,7 @@ export class ScreenRecorder extends EventEmitter {
                 '-f',
                 'pulse',
                 '-thread_queue_size',
-                '4096', // Reduced from 16384 for lower streaming latency (balanced: ~0.17s delay vs stability)
+                '4096', // Buffer size for audio capture stability
                 '-i',
                 VIRTUAL_SPEAKER_MONITOR,
 
@@ -356,23 +357,6 @@ export class ScreenRecorder extends EventEmitter {
                 'image2',
                 '-y',
                 screenshotPattern,
-
-                // === OUTPUT 3: STREAMING AUDIO ===
-                '-map',
-                '0:a:0',
-                '-acodec',
-                'pcm_f32le',
-                '-ac',
-                '1',
-                '-ar',
-                this.streamingSampleRate.toString(),
-                '-fflags',
-                'nobuffer',
-                '-flags',
-                'low_delay',
-                '-f',
-                'f32le',
-                'pipe:1',
             )
         } else {
             // Separate audio and video recording
@@ -395,9 +379,7 @@ export class ScreenRecorder extends EventEmitter {
                 '-f',
                 'pulse',
                 '-thread_queue_size',
-                '4096', // Reduced from 16384 for lower streaming latency (balanced: ~0.17s delay vs stability)
-                '-fflags',
-                'nobuffer',
+                '4096', // Buffer size for audio capture stability
                 '-i',
                 VIRTUAL_SPEAKER_MONITOR,
 
@@ -461,23 +443,6 @@ export class ScreenRecorder extends EventEmitter {
                 'image2',
                 '-y',
                 screenshotPattern,
-
-                // === OUTPUT 4: STREAMING AUDIO ===
-                '-map',
-                '1:a:0',
-                '-acodec',
-                'pcm_f32le',
-                '-ac',
-                '1',
-                '-ar',
-                this.streamingSampleRate.toString(),
-                '-fflags',
-                'nobuffer',
-                '-flags',
-                'low_delay',
-                '-f',
-                'f32le',
-                'pipe:1',
             )
         }
 
@@ -488,7 +453,7 @@ export class ScreenRecorder extends EventEmitter {
         if (!this.ffmpegProcess) return
 
         this.ffmpegProcess.on('error', (error) => {
-            console.error('FFmpeg error:', error)
+            console.error('FFmpeg error:', formatError(error))
             this.emit('error', error)
         })
 
@@ -679,20 +644,24 @@ export class ScreenRecorder extends EventEmitter {
             this.ffmpegProcess.stdout?.on('data', (data: Buffer) => {
                 try {
                     if (Streaming.instance) {
-                        const float32Array = new Float32Array(
-                            data.buffer,
-                            data.byteOffset,
-                            data.length / 4,
-                        )
-                        Streaming.instance.processAudioChunk(float32Array)
+                        // ❌ DISABLED: FFmpeg audio streaming disabled
+                        // Now using Web Audio API mixing directly from browser for ultra-low latency
+                        // See audio-capture.ts files for the new streaming approach
+
+                        // const float32Array = new Float32Array(
+                        //     data.buffer,
+                        //     data.byteOffset,
+                        //     data.length / 4,
+                        // )
+                        // Streaming.instance.processAudioChunk(float32Array)
                     }
                 } catch (error) {
-                    console.error('Failed to process audio chunk:', error)
+                    console.error('Failed to process audio chunk:', formatError(error))
                     // Don't throw - continue processing other chunks
                 }
             })
         } catch (error) {
-            console.error('Failed to setup streaming audio:', error)
+            console.error('Failed to setup streaming audio:', formatError(error))
         }
     }
 
@@ -799,11 +768,11 @@ export class ScreenRecorder extends EventEmitter {
 
                     console.log(`✅ Chunk uploaded: ${filename}`)
                 } catch (error) {
-                    console.error(`Failed to upload chunk ${filename}:`, error)
+                    console.error(`Failed to upload chunk ${filename}:`, formatError(error))
                 }
             }
         } catch (error) {
-            console.error('Failed to read chunks directory:', error)
+            console.error('Failed to read chunks directory:', formatError(error))
         }
     }
 
@@ -838,7 +807,7 @@ export class ScreenRecorder extends EventEmitter {
                 fs.unlinkSync(this.audioOutputPath)
             }
         } catch (error) {
-            console.error('Failed to upload audio file:', error)
+            console.error('Failed to upload audio file:', formatError(error))
             // Don't throw - continue with video upload
         }
 
@@ -863,7 +832,7 @@ export class ScreenRecorder extends EventEmitter {
                 fs.unlinkSync(this.outputPath)
             }
         } catch (error) {
-            console.error('Failed to upload video file:', error)
+            console.error('Failed to upload video file:', formatError(error))
             // Don't throw - mark as uploaded to allow process completion
         }
 
@@ -1042,11 +1011,11 @@ export class ScreenRecorder extends EventEmitter {
                     await this.uploadToS3()
                     console.log('✅ Upload completed successfully')
                 } catch (error) {
-                    console.error('❌ Upload failed:', error)
+                    console.error('❌ Upload failed:', formatError(error))
                 }
             }
         } catch (error) {
-            console.error('❌ Error during recording processing:', error)
+            console.error('❌ Error during recording processing:', formatError(error))
 
             if (error instanceof Error) {
                 if (
