@@ -11,7 +11,10 @@ import { formatError } from '../utils/Logger'
 import { closeMeeting } from './meet/closeMeeting'
 import { createStateDetector } from '../utils/meeting-state-detector'
 import { MEET_STATE_CONFIG } from './meet-state-config'
-import { enableMeetAudioCapture, verifyMeetAudioCapture } from './meet/audio-capture'
+import {
+    enableMeetAudioCapture,
+    verifyMeetAudioCapture,
+} from './meet/audio-capture'
 
 // Create a singleton detector instance for Google Meet
 const meetStateDetector = createStateDetector(MEET_STATE_CONFIG)
@@ -68,7 +71,10 @@ export class MeetProvider implements MeetingProviderInterface {
                     page.evaluate(() => document.readyState),
                     new Promise((_, reject) =>
                         setTimeout(
-                            () => reject(new Error('Page freeze timeout after goto')),
+                            () =>
+                                reject(
+                                    new Error('Page freeze timeout after goto'),
+                                ),
                             10000, // 10 seconds timeout to detect freeze
                         ),
                     ),
@@ -244,7 +250,10 @@ export class MeetProvider implements MeetingProviderInterface {
                 try {
                     await verifyMeetAudioCapture(page)
                 } catch (error) {
-                    console.error('[Meet] Failed to verify audio capture post-join:', formatError(error))
+                    console.error(
+                        '[Meet] Failed to verify audio capture post-join:',
+                        formatError(error),
+                    )
                 }
             }
 
@@ -365,12 +374,15 @@ async function findShowEveryOne(
                 console.log('Successfully confirmed we are in the meeting')
             }
 
-            // Chercher le bouton People comme avant
+            // Search for People button with multiple selectors (OLD + NEW Meet UI)
             const buttons = page.locator(
                 [
+                    // OLD UI selectors (pre-Dec 2025)
                     'nav button[aria-label="People"][role="button"]',
                     'nav button[aria-label="Show everyone"][role="button"]',
                     'nav button[data-panel-id="1"][role="button"]',
+                    // NEW UI selectors (Dec 2025+) - Badge/hover tray style People button
+                    'div[role="button"][aria-haspopup="dialog"]:has(span:text("People"))',
                 ].join(', '),
             )
 
@@ -381,6 +393,13 @@ async function findShowEveryOne(
                 try {
                     await buttons.first().click()
                     console.log('Successfully clicked People button')
+                    
+                    // Dismiss the hover dialog (new UI Dec 2025+)
+                    // The new badge-style People button shows a hover dialog that needs to be dismissed
+                    // Click on the page body to move focus away from the button
+                    await page.waitForTimeout(100) // Wait for dialog to appear
+                    await page.click('body', { position: { x: 10, y: 10 }, force: true })
+                    console.log('Clicked body to dismiss People hover dialog')
                 } catch (e) {
                     console.log('Failed to click People button:', e)
                     showEveryOneFound = false
@@ -428,7 +447,8 @@ async function isInMeeting(page: Page): Promise<boolean> {
 
         // Check for meeting presence indicators FIRST
         const result = await meetStateDetector.isInMeeting(page)
-        const selectorCount = MEET_STATE_CONFIG.inMeetingPattern.selectors.length
+        const selectorCount =
+            MEET_STATE_CONFIG.inMeetingPattern.selectors.length
         const threshold = MEET_STATE_CONFIG.inMeetingPattern.threshold
         console.log(
             `Meeting presence indicators: ${result.count}/${selectorCount} visible (threshold: ${threshold}, matched: ${result.matched})`,
@@ -679,7 +699,10 @@ async function checkIndicators(
     let foundCount = 0
     for (const selector of selectors) {
         try {
-            const count = await page.locator(selector).count().catch(() => 0)
+            const count = await page
+                .locator(selector)
+                .count()
+                .catch(() => 0)
             if (count > 0) {
                 if (checkPresenceOnly) {
                     // Just check presence in DOM, not visibility
