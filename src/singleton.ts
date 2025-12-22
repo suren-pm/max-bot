@@ -9,6 +9,7 @@ class Global {
     private meetingParams: MeetingParams | null = null
     private endReason: MeetingEndReason | null = null
     private errorMessage: string | null = null
+    private shouldRetry: boolean = false // NEW: Retry flag
     public constructor() {}
 
     /**
@@ -165,6 +166,25 @@ class Global {
         // Only clear the error message, keep the end reason
         // This allows normal termination reasons to be preserved
         this.errorMessage = null
+    }
+
+    // NEW: Retry flag methods
+    public setShouldRetry(value: boolean): void {
+        this.shouldRetry = value
+        if (value) {
+            console.log('🔄 Marking error as retryable')
+        }
+    }
+
+    public getShouldRetry(): boolean {
+        return this.shouldRetry
+    }
+
+    public getRetryCount(): number {
+        if (this.meetingParams === null) {
+            return 0
+        }
+        return this.meetingParams.retry_count ?? 0
     }
 }
 
