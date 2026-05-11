@@ -46,6 +46,7 @@
     },
     "scripts": {
         "start": "node build/src/main.js",
+        "start:server": "node build/src/app.js",
         "clean": "rimraf coverage build tmp",
         "build": "echo '{\"buildDate\": \"'$(date -u +'%Y-%m-%dT%H:%M:%SZ')'\"}' > src/buildInfo.json && ./node_modules/typescript/bin/tsc --skipLibCheck -p tsconfig.release.json",
         "watch": "./node_modules/typescript/bin/tsc --skipLibCheck -w -p tsconfig.release.json",
