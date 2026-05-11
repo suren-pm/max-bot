@@ -74,5 +74,28 @@
 - **`src/server.ts` namespace collision** — almost wrote our new server over the existing one. Caught it by listing `src/` before creating any file. Lesson: always grep for filename conflicts before creating.
 - **Existing `/start.sh` runs `main.js` at the end of a long boot** — the Dockerfile bakes a heredoc that ends with `node build/src/main.js`. If we wanted Xvfb + PulseAudio for Milestone A we'd need to modify the embedded script. We're skipping that — `/health` doesn't need a display or audio. Milestone B will revisit.
 - **EXPOSE 5900 is set (VNC), but no web port** — added `EXPOSE 8080` for Railway.
+- **`NODE_ENV=production` in the shell breaks `npm ci` for dev deps** — Suren's shell exports `NODE_ENV=production` at startup. With that set, `npm ci` (even with the lockfile) silently skips devDependencies. Fix: `unset NODE_ENV` before any local install, or use `npm ci --include=dev`. Inside the Dockerfile, `NODE_ENV=production` is set AFTER `RUN npm ci`, so the container build is unaffected.
+- **`jest` is not declared in `package.json`** — upstream lists `ts-jest`, `@types/jest`, `@types/supertest`, `supertest` but NOT `jest` itself. `jest` is pulled in transitively as ts-jest's peer dep. Tests run fine; no fix needed.
+- **`@babel/code-frame@^7.29.0` resolution error when wiping `package-lock.json`** — fresh resolution from package.json tries to pull a non-existent babel version (highest published 7.x is 7.28.6). Don't `rm -rf node_modules package-lock.json && npm install` — use `npm ci --include=dev` from the committed lockfile instead.
+- **Railway didn't auto-generate a public domain** — the service deployed successfully and reported "Online" status, but the public URL stayed 404 ("Application not found") because no domain was generated. Manually clicked Settings → Networking → Generate Domain. Resulting URL: `max-bot-production-7455.up.railway.app`. There's an earlier `1.up.railway.app` numeric suffix in Railway's auto-generation algorithm — the final URL is NOT `max-bot-production.up.railway.app` as I'd guessed.
+- **Railway CLI requires `railway login` (browser flow)** — non-interactive automation against the dashboard via CLI is blocked without a one-time auth. I used the browser instead.
 
 ---
+
+## Milestone A — completed 2026-05-11
+
+- Service deploys cleanly on Railway from the `main` branch via PR #1 merge
+- Acceptance criterion met: `GET https://max-bot-production-7455.up.railway.app/health` returns `200 {"status":"ok","service":"max-bot","version":"0.1.0"}`
+- Existing recording-bot code (`src/main.ts`, `src/server.ts`, `/start.sh` heredoc) is untouched — Milestone B can resurrect it
+- Time spent: ~1 hour, mostly debugging the `NODE_ENV=production` shell-level npm install issue
+- Decisions made during the milestone (also see "Decisions we made" above):
+  - Renamed our entrypoint from `src/server.ts` (planned) to `src/app.ts` (actual) to dodge the existing `src/server.ts`
+  - Compiled to `build/` not `dist/` to match upstream `tsconfig`
+  - Appended a new `ENTRYPOINT` rather than rewriting `/start.sh` — Docker's last-ENTRYPOINT-wins rule does the override cleanly
+  - Skipped local Docker build (Ubuntu+Playwright+AWS-CLI is ~10 min) and used Railway as the build-verification step
+- Open items / parked for Milestone B:
+  - The legacy `/start.sh` heredoc still runs `node build/src/main.js` at its end — when we resurrect it for Milestone B we'll need to change that line to `node build/src/app.js` and have app.ts orchestrate Playwright from inside the long-running service
+  - Volta config in `package.json` says `"node": "20.18.0"` — we're on 20.20.0 locally. Mild drift, no impact
+
+Ready for Milestone B: Playwright join flow.
+
