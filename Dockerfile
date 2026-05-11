@@ -102,28 +102,16 @@ if ! pactl list sources short | grep -q "virtual_speaker.monitor"; then\n\
     echo "❌ virtual_speaker.monitor not found - audio setup failed"\n\
     exit 1\n\
 fi\n\
-\necho "✅ Virtual display and audio ready"\n\necho "🔍 VNC available at localhost:5900 (password: debug)"\n\n# Start application\ncd /app/\nnode build/src/main.js\n\n# Cleanup on exit\ntrap "kill $PULSE_PID $VNC_PID $XVFB_PID 2>/dev/null || true" EXIT\n' > /start.sh && chmod +x /start.sh
+\necho "✅ Virtual display and audio ready"\n\necho "🔍 VNC available at localhost:5900 (password: debug)"\n\n# Start application\ncd /app/\nnode build/src/app.js\n\n# Cleanup on exit\ntrap "kill $PULSE_PID $VNC_PID $XVFB_PID 2>/dev/null || true" EXIT\n' > /start.sh && chmod +x /start.sh
 
 # Expose VNC port for debugging
 EXPOSE 5900
 
 ENTRYPOINT ["/start.sh"]
 
-# ---------------------------------------------------------------------------
-# Max-Bot Milestone A: HTTP server entrypoint override
-#
-# The upstream meet-teams-bot expects to run as a one-shot recording job
-# (ENTRYPOINT ["/start.sh"], which boots Xvfb + PulseAudio + Chromium, then
-# runs `node build/src/main.js` after reading params from STDIN).
-#
-# For the self-hosted Max-Bot we need a long-running HTTP service so Railway
-# can health-check and so we can later accept /join + /leave requests.
-#
-# The last ENTRYPOINT in a Dockerfile wins, so the line below overrides the
-# /start.sh entrypoint above. We leave /start.sh baked into the image — it
-# will be re-introduced in Milestone B when we need the display + audio
-# infrastructure for Playwright + Chromium.
-# ---------------------------------------------------------------------------
-
+# Max-Bot: expose port 8080 so Railway can route HTTP traffic to app.ts.
+# The /start.sh heredoc above has been edited to exec `node build/src/app.js`
+# at its end (instead of upstream's `node build/src/main.js`), so the long-
+# running HTTP server is what runs after Xvfb + PulseAudio + Chromium are
+# ready. Playwright in src/bot/joinMeet.ts uses the Xvfb display.
 EXPOSE 8080
-ENTRYPOINT ["node", "build/src/app.js"]
