@@ -99,3 +99,28 @@
 
 Ready for Milestone B: Playwright join flow.
 
+---
+
+## Milestone B — POST /join + Playwright waiting-room flow
+
+### What's added (so far on `milestone-b/playwright-join` branch)
+
+- `src/bot/joinMeet.ts` — self-contained Playwright + Google Meet driver. Inspired by upstream `src/meeting/meet.ts` selectors but independent of GLOBAL singleton / state machine.
+- `src/bot/sessions.ts` — in-memory `Map<bot_id, JoinSession>` registry.
+- `src/app.ts` — added `POST /join`, `POST /leave/:bot_id` routes alongside the existing `/health`.
+- `Dockerfile` — reverted Milestone-A `ENTRYPOINT ["node", "build/src/app.js"]` override. Single `ENTRYPOINT ["/start.sh"]` remains, with its heredoc edited so the final `exec` is `node build/src/app.js` (was `node build/src/main.js` upstream).
+
+### Decisions made during the milestone
+
+- **Minimal reimplementation, not reuse, of upstream Meet logic.** `src/meeting/meet.ts`'s `MeetProvider` is tightly coupled to `GLOBAL` singleton and the recording state machine. Reusing it would pull in nearly the whole upstream framework. `src/bot/joinMeet.ts` copies the DOM selectors with `// References:` comments pointing back at the source-line numbers.
+- **In-process Playwright, not child-process.** Spawning `node build/src/main.js` per join would collide with its internal port-8080 `server()` and assumes single-shot lifecycle. In-process is simpler.
+- **Single bot at a time.** `POST /join` returns 409 if `hasActiveSession()` is true. v1 scope.
+- **Restored `/start.sh`** as the Docker entrypoint so Xvfb is up before Playwright launches.
+
+### Gotchas
+
+- **`@types/node` is pinned at 14.x by upstream**, so `crypto.randomUUID` (Node 16+) is missing from the type declarations. Cast around it: `(crypto as unknown as { randomUUID: () => string }).randomUUID`. At runtime, Node 20 has the function.
+- **Upstream has ~18 broken Jest tests in `src/urlParser/`** (pre-existing on `main`). Confirmed they fail on `main` before my changes too. Not caused by Milestone B; not in scope to fix here.
+- **`/start.sh` boot takes ~10–20 seconds** before `app.ts` is ready (Xvfb + PulseAudio + sanity check + node). Railway's healthcheckTimeout in `railway.toml` is 60s — should be fine, but if the deploy reports healthcheck failure, bump it to 120s and re-PR.
+
+
