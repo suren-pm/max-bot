@@ -1,0 +1,15 @@
+# Railway build + deploy configuration for the max-bot service.
+#
+# Milestone A: builds via the existing Dockerfile, starts the new HTTP
+# server (build/src/app.js), uses /health for health checks.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node build/src/app.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
