@@ -108,3 +108,22 @@ fi\n\
 EXPOSE 5900
 
 ENTRYPOINT ["/start.sh"]
+
+# ---------------------------------------------------------------------------
+# Max-Bot Milestone A: HTTP server entrypoint override
+#
+# The upstream meet-teams-bot expects to run as a one-shot recording job
+# (ENTRYPOINT ["/start.sh"], which boots Xvfb + PulseAudio + Chromium, then
+# runs `node build/src/main.js` after reading params from STDIN).
+#
+# For the self-hosted Max-Bot we need a long-running HTTP service so Railway
+# can health-check and so we can later accept /join + /leave requests.
+#
+# The last ENTRYPOINT in a Dockerfile wins, so the line below overrides the
+# /start.sh entrypoint above. We leave /start.sh baked into the image — it
+# will be re-introduced in Milestone B when we need the display + audio
+# infrastructure for Playwright + Chromium.
+# ---------------------------------------------------------------------------
+
+EXPOSE 8080
+ENTRYPOINT ["node", "build/src/app.js"]
