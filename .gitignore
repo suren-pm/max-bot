@@ -1,5 +1,9 @@
 [0-9a-zA-Z]*-[0-9a-zA-Z]*-[0-9a-zA-Z]*-[0-9a-zA-Z]*-[0-9a-zA-Z]*
 
+# Max-Bot: keep our docs even though their YYYY-MM-DD-name filenames
+# match the UUID-shaped pattern above.
+!docs/**
+
 # Logs
 logs
 *.log
