@@ -162,7 +162,36 @@ Read `src/meeting/shared/audio-capture.ts` (460 lines) — the upstream pattern 
 
 **Strategy:** copy the browser-side script content (~250 lines) into `src/bot/audioCapture.ts` and rewrite the Node-side wrapper to take an `AudioStream` parameter instead of touching `Streaming.instance`. Strip Teams-specific scaffolding (we're Meet-only in v1).
 
-**Plan deviation from C.5/C.6:** the plan's draft used `ScriptProcessorNode` + `createMediaElementSource`. Upstream uses `RTCPeerConnection`-interception + `MediaStreamTrackProcessor`. Upstream's approach is correct (Meet uses WebRTC, not `<audio>` elements). Will adapt the impl during C.6.
+**Plan deviation from C.5/C.6:** the plan's draft used `ScriptProcessorNode` + `createMediaElementSource`. Upstream uses `RTCPeerConnection`-interception + `MediaStreamTrackProcessor`. Upstream's approach is correct (Meet uses WebRTC, not `<audio>` elements). Adapted the impl during C.6.
+
+---
+
+## Milestone C — Acceptance 2026-05-12
+
+- **Live URL:** `wss://max-bot-production-7455.up.railway.app/ws/<bot_id>`
+- **WAV captured:** `/Users/surendrankandasamy/Documents/max-bot-capture.wav` — 30.2 seconds, 967 KB, mono 16 kHz Int16 PCM
+- **First chunk latency:** 537 ms from WS connect → first audio frame
+- **Audible content:** Suren's voice clearly captured from inside the Meet call
+
+### The three B.11-style fixes that were needed during C.13 live test
+
+1. **PR #6 — `onPageReady` hook (timing fix):** original code attached audio capture AFTER `joinMeet` returned, which is AFTER navigation and admission. By then Meet's WebRTC RTCPeerConnections were already constructed with the original (un-wrapped) constructor, so our 'track' listeners never fired. Refactored `joinMeet` to accept an `onPageReady(page)` callback that runs BEFORE `page.goto`. The wrap is now in place before any Meet JavaScript runs.
+2. **PR #7 — browser-side diagnostics:** even after fix 1, `chunksSent` stayed 0. Added `window.__maxBotAudio` state object the script maintains as it runs, plus a `GET /diag/audio/:bot_id` endpoint that `page.evaluate`s the state. First-time success: all 3 Meet audio tracks were detected and connected to the mixer, processor started — but no frames flowed. Also hardened the `RTCPeerConnection` wrap to copy `prototype` + all own property descriptors (was previously using `Object.assign` which misses non-enumerable statics).
+3. **PR #8 — `--autoplay-policy=no-user-gesture-required`:** root cause. Chrome's autoplay policy keeps the `AudioContext` in `suspended` state without a real user gesture. `audioCtx.resume()` returns a promise that never settles in Playwright. Adding the Chromium launch flag lets the AudioContext start running immediately, the Web Audio mixer pulls frames, MediaStreamTrackProcessor produces output, the callback fires. After this PR `chunksSent: 15703` after a few minutes.
+
+### Updated decision log for Milestone C
+
+- ✓ Reuse upstream's Web Audio approach (browser-injection via RTCPeerConnection wrap + MediaStreamTrackProcessor) — proven correct.
+- ✓ In-process Playwright + per-bot AudioStream — proven correct.
+- ✓ Single-bot single-listener — fine for v1.
+- ✓ Pure-JS linear interpolation resampler (48 kHz → 16 kHz) — quality is good per the WAV listening test.
+- ✓ WebSocket protocol byte-identical to MBaaS — Milestone E will be a one-line URL swap on max-brain.
+
+### Gotchas to remember for future-Claude
+
+- **Chromium audio in Playwright needs `--autoplay-policy=no-user-gesture-required`.** Without it, `AudioContext.resume()` never resolves. Wasted ~3 PRs before catching this.
+- **`page.addInitScript` only runs on FUTURE navigations.** If you want a script to wrap browser APIs before page JS runs, you must call `addInitScript` BEFORE `page.goto`. Add a hook to `joinMeet` rather than calling capture-setup after `joinMeet` returns.
+- **Direct DOM/WindowObject diagnostic endpoints are gold.** `GET /diag/audio/:bot_id` saved hours that would otherwise have been spent guessing at Railway logs. Build them early.
 
 
 
