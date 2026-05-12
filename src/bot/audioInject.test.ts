@@ -72,10 +72,10 @@ describe('AudioInject', () => {
         mocks.stdinDestroyedFlag.destroyed = false
     })
 
-    it('spawns ffmpeg with f32le float-input + pulse virtual_mic output', () => {
+    it('spawns ffmpeg with f32le float-input + s16le FIFO output', () => {
         new AudioInject({
             sampleRate: 16000,
-            pulseDevice: 'virtual_mic',
+            fifoPath: '/tmp/pulse/virtual_mic.fifo',
         })
         const cmd = mocks.spawnMock.mock.calls[0][0]
         const args = mocks.spawnMock.mock.calls[0][1] as string[]
@@ -91,18 +91,17 @@ describe('AudioInject', () => {
                 '-i',
                 '-',
                 '-f',
-                'pulse',
-                'virtual_mic',
+                's16le',
+                '/tmp/pulse/virtual_mic.fifo',
             ]),
         )
     })
 
-    it('defaults pulseDevice to virtual_mic when not specified', () => {
+    it('defaults fifoPath to /tmp/pulse/virtual_mic.fifo', () => {
         new AudioInject({ sampleRate: 16000 })
         const args = mocks.spawnMock.mock.calls[0][1] as string[]
-        expect(args).toContain('virtual_mic')
-        expect(args).toContain('-f')
-        expect(args).toContain('pulse')
+        expect(args).toContain('/tmp/pulse/virtual_mic.fifo')
+        expect(args).toContain('s16le')
     })
 
     it('converts Int16 LE buffer to Float32 LE and writes to stdin', () => {
