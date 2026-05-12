@@ -125,21 +125,25 @@ export function createServerWithWs(): AppWithServer {
                 srcSampleRate: SOURCE_SAMPLE_RATE_HINT,
                 dstSampleRate: OUTPUT_SAMPLE_RATE,
             })
+            // Set up audio capture inside joinMeet's onPageReady hook so
+            // the RTCPeerConnection wrapper is in place BEFORE Meet's
+            // JavaScript starts running. Without this, our wrap fires
+            // too late and the audio tracks bypass our mixer.
             const { bot_id, page, close } = await joinMeet({
                 meeting_url,
                 bot_name,
+                onPageReady: async (page) => {
+                    try {
+                        await attachAudioCapture(page, audioStream)
+                    } catch (err) {
+                        // eslint-disable-next-line no-console
+                        console.warn(
+                            'attachAudioCapture failed (continuing without audio):',
+                            err instanceof Error ? err.message : String(err),
+                        )
+                    }
+                },
             })
-            // Wire the Web Audio mixer up. Errors here are non-fatal —
-            // the bot is already in the meeting; we just won't get audio.
-            try {
-                await attachAudioCapture(page, audioStream)
-            } catch (err) {
-                // eslint-disable-next-line no-console
-                console.warn(
-                    'attachAudioCapture failed (continuing without audio):',
-                    err instanceof Error ? err.message : String(err),
-                )
-            }
             registerSession({
                 bot_id,
                 meeting_url,
