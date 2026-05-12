@@ -15,6 +15,9 @@ jest.mock('child_process', () => {
                 return stdinDestroyedFlag.destroyed
             },
         },
+        stderr: {
+            on: jest.fn(),
+        },
         on: (ev: string, cb: (...a: unknown[]) => void) => {
             if (ev === 'error') onErrorListeners.push(cb as (e: Error) => void)
             if (ev === 'exit') onExitListeners.push(cb as (code: number) => void)
@@ -69,10 +72,10 @@ describe('AudioInject', () => {
         mocks.stdinDestroyedFlag.destroyed = false
     })
 
-    it('spawns ffmpeg with f32le float-input + alsa pulse:virtual_mic output', () => {
+    it('spawns ffmpeg with f32le float-input + pulse virtual_mic output', () => {
         new AudioInject({
             sampleRate: 16000,
-            alsaDevice: 'pulse:virtual_mic',
+            pulseDevice: 'virtual_mic',
         })
         const cmd = mocks.spawnMock.mock.calls[0][0]
         const args = mocks.spawnMock.mock.calls[0][1] as string[]
@@ -88,18 +91,18 @@ describe('AudioInject', () => {
                 '-i',
                 '-',
                 '-f',
-                'alsa',
-                '-acodec',
-                'pcm_s16le',
-                'pulse:virtual_mic',
+                'pulse',
+                'virtual_mic',
             ]),
         )
     })
 
-    it('defaults alsaDevice to pulse:virtual_mic when not specified', () => {
+    it('defaults pulseDevice to virtual_mic when not specified', () => {
         new AudioInject({ sampleRate: 16000 })
         const args = mocks.spawnMock.mock.calls[0][1] as string[]
-        expect(args).toContain('pulse:virtual_mic')
+        expect(args).toContain('virtual_mic')
+        expect(args).toContain('-f')
+        expect(args).toContain('pulse')
     })
 
     it('converts Int16 LE buffer to Float32 LE and writes to stdin', () => {

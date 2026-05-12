@@ -263,6 +263,7 @@ export function createServerWithWs(): AppWithServer {
             ffmpeg_pid: child?.pid ?? null,
             ffmpeg_killed: child?.killed ?? null,
             ffmpeg_exit_code: child?.exitCode ?? null,
+            ffmpeg_stderr_tail: session.audioInject.stderrTail.join(''),
         })
     })
 
