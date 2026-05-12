@@ -1,17 +1,21 @@
-// Top-level long-running HTTP service entrypoint for the self-hosted max-bot.
+// Top-level long-running HTTP+WS service entrypoint for the self-hosted max-bot.
 //
 // Milestone A: /health
-// Milestone B: + POST /join, POST /leave/:bot_id
-// Later milestones will add WebSocket /ws/{bot_id} for audio.
+// Milestone B: + POST /join, POST /leave/:bot_id, GET /diag
+// Milestone C: + WebSocket /ws/:bot_id, per-bot AudioStream
 //
 // Note: `src/server.ts` already exists in this repo from upstream
-// meet-teams-bot — that's the in-recording control plane invoked
-// from main.ts. We deliberately do NOT touch it. This file is a
-// separate, new entrypoint.
+// meet-teams-bot — that's the in-recording control plane invoked from
+// main.ts. We deliberately do NOT touch it. This file is a separate,
+// new entrypoint.
 
 import { execSync } from 'child_process'
 import express, { Application, Request, Response } from 'express'
+import { createServer as createHttpServer, Server as HttpServer } from 'http'
+import { WebSocketServer } from 'ws'
 
+import { attachAudioCapture } from './bot/audioCapture'
+import { AudioStream } from './bot/audioStream'
 import { joinMeet } from './bot/joinMeet'
 import {
     getSession,
@@ -19,10 +23,32 @@ import {
     registerSession,
     removeSession,
 } from './bot/sessions'
+import { attachWebSocketServer } from './bot/wsServer'
 
 const VERSION = '0.1.0'
 
+// The output sample rate of every captured audio stream. Matches what
+// MBaaS sends max-brain today; Milestone E becomes a one-line URL swap.
+const OUTPUT_SAMPLE_RATE = 16000
+
+// Source sample rate from Chrome's WebRTC track — virtually always 48kHz.
+// The AudioStream resampler tolerates any source rate; we set 48k as a
+// reasonable initial estimate and let the actual frame.sampleRate flow
+// through. (The Float32 frames go in, resampling is applied per push.)
+const SOURCE_SAMPLE_RATE_HINT = 48000
+
+export interface AppWithServer {
+    app: Application
+    server: HttpServer
+    wss: WebSocketServer
+}
+
 export function createServer(): Application {
+    const { app } = createServerWithWs()
+    return app
+}
+
+export function createServerWithWs(): AppWithServer {
     const app = express()
     app.use(express.json())
 
@@ -35,7 +61,7 @@ export function createServer(): Application {
     })
 
     // Diagnostic endpoint — reports container state useful for debugging
-    // Playwright/Xvfb issues without needing Railway log access.
+    // Playwright/Xvfb/PulseAudio issues without needing Railway log access.
     app.get('/diag', (_req: Request, res: Response) => {
         const tryExec = (cmd: string): string => {
             try {
@@ -68,6 +94,7 @@ export function createServer(): Application {
                 'pactl list sources short 2>&1 | head -5 || echo NO-SOURCES',
             ),
             startsh_present: tryExec("ls -la /start.sh 2>&1 || echo 'NO'"),
+            active_ws_clients: wss?.clients?.size ?? 0,
         })
     })
 
@@ -94,16 +121,35 @@ export function createServer(): Application {
         }
 
         try {
-            const { bot_id, close } = await joinMeet({
+            const audioStream = new AudioStream({
+                srcSampleRate: SOURCE_SAMPLE_RATE_HINT,
+                dstSampleRate: OUTPUT_SAMPLE_RATE,
+            })
+            const { bot_id, page, close } = await joinMeet({
                 meeting_url,
                 bot_name,
             })
+            // Wire the Web Audio mixer up. Errors here are non-fatal —
+            // the bot is already in the meeting; we just won't get audio.
+            try {
+                await attachAudioCapture(page, audioStream)
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(
+                    'attachAudioCapture failed (continuing without audio):',
+                    err instanceof Error ? err.message : String(err),
+                )
+            }
             registerSession({
                 bot_id,
                 meeting_url,
                 bot_name,
                 startedAt: new Date(),
-                close,
+                audioStream,
+                close: async () => {
+                    audioStream.stop()
+                    await close()
+                },
             })
             res.status(200).json({ bot_id })
         } catch (err) {
@@ -124,7 +170,7 @@ export function createServer(): Application {
         try {
             await session.close()
         } catch (err) {
-            // Log but still treat as successful — the goal is to forget the bot.
+            // Log but still treat as successful — goal is to forget the bot.
             const message = err instanceof Error ? err.message : String(err)
             // eslint-disable-next-line no-console
             console.warn(`close() threw during /leave/${bot_id}: ${message}`)
@@ -133,15 +179,19 @@ export function createServer(): Application {
         res.status(200).json({ ok: true, bot_id })
     })
 
-    return app
+    // Wrap in an http.Server and attach the WebSocket upgrade handler.
+    const httpServer = createHttpServer(app)
+    const wss = attachWebSocketServer(httpServer)
+
+    return { app, server: httpServer, wss }
 }
 
 // Allow running directly: `node build/src/app.js` on Railway.
 // PORT is provided by Railway; default 8080 for local dev.
 if (require.main === module) {
     const port = Number(process.env.PORT) || 8080
-    const app = createServer()
-    app.listen(port, () => {
+    const { server } = createServerWithWs()
+    server.listen(port, () => {
         // eslint-disable-next-line no-console
         console.log(`max-bot listening on :${port}`)
     })
