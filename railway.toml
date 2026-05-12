@@ -1,15 +1,21 @@
 # Railway build + deploy configuration for the max-bot service.
 #
-# Milestone A: builds via the existing Dockerfile, starts the new HTTP
-# server (build/src/app.js), uses /health for health checks.
+# Milestone A: builds via the existing Dockerfile, uses /health for
+# health checks.
+#
+# Milestone B: DO NOT set a startCommand. Railway treats startCommand
+# as the container's exec command and that overrides the Dockerfile's
+# ENTRYPOINT (/start.sh). /start.sh is what boots Xvfb + PulseAudio
+# before exec'ing `node build/src/app.js` at the end, and without it
+# Playwright Chromium has no X display to render to.
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "node build/src/app.js"
+# (intentionally no startCommand — let Dockerfile ENTRYPOINT run)
 healthcheckPath = "/health"
-healthcheckTimeout = 60
+healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
