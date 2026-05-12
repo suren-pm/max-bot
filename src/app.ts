@@ -150,6 +150,7 @@ export function createServerWithWs(): AppWithServer {
                 bot_name,
                 startedAt: new Date(),
                 audioStream,
+                page,
                 close: async () => {
                     audioStream.stop()
                     await close()
@@ -159,6 +160,31 @@ export function createServerWithWs(): AppWithServer {
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             res.status(500).json({ error: message })
+        }
+    })
+
+    // Browser-side audio diagnostics. Reads the window.__maxBotAudio
+    // state object the audioCapture inject script maintains, so we can
+    // tell which step of the capture pipeline is failing on a live bot.
+    app.get('/diag/audio/:bot_id', async (req: Request, res: Response) => {
+        const { bot_id } = req.params
+        const session = getSession(bot_id)
+        if (!session) {
+            res.status(404).json({
+                error: `no active session for bot_id=${bot_id}`,
+            })
+            return
+        }
+        try {
+            const state = await session.page.evaluate(() => {
+                return (window as unknown as { __maxBotAudio?: unknown })
+                    .__maxBotAudio ?? null
+            })
+            res.status(200).json({ bot_id, browser_state: state })
+        } catch (err) {
+            res.status(500).json({
+                error: err instanceof Error ? err.message : String(err),
+            })
         }
     })
 

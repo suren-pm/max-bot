@@ -35,10 +35,32 @@ interface BrowserAudioChunk {
 //   - No upstream Streaming.instance reference on the Node side
 const BROWSER_SCRIPT = `
 (function() {
+    // Diagnostic state — read via page.evaluate from Node.
+    window.__maxBotAudio = {
+        scriptLoaded: false,
+        scriptLoadedAt: null,
+        audioContextCreated: false,
+        rtcWrapped: false,
+        rtcWrapError: null,
+        trackEventCount: 0,
+        tracksConnected: 0,
+        mediaStreamTrackProcessorAvailable:
+            typeof MediaStreamTrackProcessor !== 'undefined',
+        processorStarted: false,
+        chunksSent: 0,
+        lastError: null,
+        callbackAvailable: false,
+    };
+
     try {
         console.log('${LOG_PREFIX} Initializing Web Audio mixer...');
+        window.__maxBotAudio.scriptLoaded = true;
+        window.__maxBotAudio.scriptLoadedAt = Date.now();
+        window.__maxBotAudio.callbackAvailable =
+            typeof window.${CALLBACK_NAME} === 'function';
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        window.__maxBotAudio.audioContextCreated = true;
         const mixerDestination = audioCtx.createMediaStreamDestination();
         const mixedAudioSources = new Map();
         let mixedStreamProcessor = null;
@@ -56,11 +78,13 @@ const BROWSER_SCRIPT = `
             try {
                 if (typeof MediaStreamTrackProcessor === 'undefined') {
                     console.error('${LOG_PREFIX} MediaStreamTrackProcessor not available');
+                    window.__maxBotAudio.lastError = 'MediaStreamTrackProcessor not available';
                     return;
                 }
                 const processor = new MediaStreamTrackProcessor({ track: mixedTrack });
                 const reader = processor.readable.getReader();
                 mixedStreamProcessor = reader;
+                window.__maxBotAudio.processorStarted = true;
                 abortController = new AbortController();
                 const signal = abortController.signal;
                 console.log('${LOG_PREFIX} Started Web Audio mixed stream processor');
@@ -109,6 +133,7 @@ const BROWSER_SCRIPT = `
                                         numberOfFrames: numSamples,
                                     });
                                     chunksSent++;
+                                    window.__maxBotAudio.chunksSent = chunksSent;
                                     if (chunksSent === 1) {
                                         console.log('${LOG_PREFIX} First chunk sent to Node');
                                     } else if (chunksSent % 100 === 0) {
@@ -162,6 +187,7 @@ const BROWSER_SCRIPT = `
                 const source = audioCtx.createMediaStreamSource(stream);
                 source.connect(mixerDestination);
                 mixedAudioSources.set(track.id, source);
+                window.__maxBotAudio.tracksConnected = mixedAudioSources.size;
                 console.log('${LOG_PREFIX} Connected track ' + track.id + ' (' + mixedAudioSources.size + ' total)');
                 if (mixedAudioSources.size === 1) {
                     startMixedStreamProcessor();
@@ -169,31 +195,50 @@ const BROWSER_SCRIPT = `
                 track.onended = () => {
                     source.disconnect();
                     mixedAudioSources.delete(track.id);
+                    window.__maxBotAudio.tracksConnected = mixedAudioSources.size;
                 };
             } catch (e) {
                 console.error('${LOG_PREFIX} Failed to connect track:', e);
+                window.__maxBotAudio.lastError = 'connectTrackToMixer: ' + e.message;
             }
         }
 
         // Wrap RTCPeerConnection so we hook every audio track that arrives.
-        if (typeof window.RTCPeerConnection !== 'undefined') {
-            const OriginalPC = window.RTCPeerConnection;
-            window.RTCPeerConnection = function (...args) {
-                const pc = new OriginalPC(...args);
-                pc.addEventListener('track', (event) => {
-                    if (event.track.kind === 'audio') {
-                        console.log('${LOG_PREFIX} Audio track detected:', event.track.id);
-                        connectTrackToMixer(event.track);
-                    }
-                });
-                return pc;
-            };
-            // Preserve static fields.
-            Object.setPrototypeOf(window.RTCPeerConnection, OriginalPC);
-            Object.assign(window.RTCPeerConnection, OriginalPC);
+        try {
+            if (typeof window.RTCPeerConnection !== 'undefined') {
+                const OriginalPC = window.RTCPeerConnection;
+                const WrappedPC = function (...args) {
+                    const pc = new OriginalPC(...args);
+                    pc.addEventListener('track', (event) => {
+                        window.__maxBotAudio.trackEventCount++;
+                        if (event.track.kind === 'audio') {
+                            console.log('${LOG_PREFIX} Audio track detected:', event.track.id);
+                            connectTrackToMixer(event.track);
+                        }
+                    });
+                    return pc;
+                };
+                // Copy prototype so 'instanceof RTCPeerConnection' still works
+                // (Meet may check this internally).
+                WrappedPC.prototype = OriginalPC.prototype;
+                // Copy static methods (e.g. generateCertificate).
+                for (const key of Object.getOwnPropertyNames(OriginalPC)) {
+                    if (key === 'prototype' || key === 'length' || key === 'name') continue;
+                    try {
+                        const desc = Object.getOwnPropertyDescriptor(OriginalPC, key);
+                        if (desc) Object.defineProperty(WrappedPC, key, desc);
+                    } catch (e) {}
+                }
+                window.RTCPeerConnection = WrappedPC;
+                window.__maxBotAudio.rtcWrapped = true;
+            }
+        } catch (e) {
+            console.error('${LOG_PREFIX} RTCPeerConnection wrap failed:', e);
+            window.__maxBotAudio.rtcWrapError = e.message;
         }
     } catch (e) {
         console.error('${LOG_PREFIX} Audio capture init failed:', e);
+        if (window.__maxBotAudio) window.__maxBotAudio.lastError = e.message;
     }
 })();
 `

@@ -24,6 +24,7 @@ describe('bot/sessions', () => {
             bot_name: 'Max',
             startedAt: new Date('2026-05-11T00:00:00Z'),
             audioStream: makeAudioStream(),
+            page: {} as never,
             close: jest.fn(async () => {}),
         }
         registerSession(session)
@@ -42,6 +43,7 @@ describe('bot/sessions', () => {
             bot_name: 'Max',
             startedAt: new Date(),
             audioStream: makeAudioStream(),
+            page: {} as never,
             close: jest.fn(async () => {}),
         })
         expect(hasActiveSession()).toBe(true)
