@@ -101,6 +101,8 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     const bot_id = randomUUID()
 
     // Headful Chrome: Xvfb provides the display inside the container.
+    // Explicitly pass DISPLAY through Playwright's env option in case
+    // chromium.launch doesn't inherit it from the parent process.
     const launchOpts: LaunchOptions = {
         headless: false,
         args: [
@@ -108,6 +110,10 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
             '--disable-blink-features=AutomationControlled',
             '--use-fake-ui-for-media-stream',
         ],
+        env: {
+            ...process.env,
+            DISPLAY: process.env.DISPLAY ?? ':99',
+        } as NodeJS.ProcessEnv,
     }
     const browser: Browser = await chromium.launch(launchOpts)
 
