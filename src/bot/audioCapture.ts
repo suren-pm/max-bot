@@ -40,6 +40,7 @@ const BROWSER_SCRIPT = `
         scriptLoaded: false,
         scriptLoadedAt: null,
         audioContextCreated: false,
+        audioContextState: null,
         rtcWrapped: false,
         rtcWrapError: null,
         trackEventCount: 0,
@@ -47,6 +48,7 @@ const BROWSER_SCRIPT = `
         mediaStreamTrackProcessorAvailable:
             typeof MediaStreamTrackProcessor !== 'undefined',
         processorStarted: false,
+        readerReadCallsTotal: 0,
         chunksSent: 0,
         lastError: null,
         callbackAvailable: false,

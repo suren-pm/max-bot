@@ -122,6 +122,12 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
             '--no-sandbox',
             '--disable-blink-features=AutomationControlled',
             '--use-fake-ui-for-media-stream',
+            // Critical for audio capture: without this, AudioContext is
+            // created in 'suspended' state and stays there forever
+            // because there's no real user gesture inside Playwright.
+            // Web Audio graph won't push frames through the mixer if
+            // the context is suspended.
+            '--autoplay-policy=no-user-gesture-required',
         ],
         env: {
             ...process.env,
