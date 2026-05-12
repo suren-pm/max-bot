@@ -24,6 +24,7 @@ describe('bot/sessions', () => {
             bot_name: 'Max',
             startedAt: new Date('2026-05-11T00:00:00Z'),
             audioStream: makeAudioStream(),
+            audioInject: {} as never,
             page: {} as never,
             close: jest.fn(async () => {}),
         }
@@ -43,6 +44,7 @@ describe('bot/sessions', () => {
             bot_name: 'Max',
             startedAt: new Date(),
             audioStream: makeAudioStream(),
+            audioInject: {} as never,
             page: {} as never,
             close: jest.fn(async () => {}),
         })

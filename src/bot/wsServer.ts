@@ -11,41 +11,65 @@ import { WebSocket, WebSocketServer } from 'ws'
 
 import { getSession } from './sessions'
 
-const WS_PATH_RE = /^\/ws\/([A-Za-z0-9_-]+)\/?$/
+const WS_PATH_OUT_RE = /^\/ws\/([A-Za-z0-9_-]+)\/?$/
+const WS_PATH_IN_RE = /^\/ws_in\/([A-Za-z0-9_-]+)\/?$/
 
 export function attachWebSocketServer(server: HttpServer): WebSocketServer {
     const wss = new WebSocketServer({ noServer: true })
 
     server.on('upgrade', (req: IncomingMessage, socket, head) => {
         const url = req.url ?? ''
-        const match = WS_PATH_RE.exec(url)
-        if (!match) {
-            socket.destroy()
-            return
-        }
-        const bot_id = match[1]
-        const session = getSession(bot_id)
-        if (!session) {
-            // Accept the upgrade then immediately close with policy-violation
-            // code so the client gets a clean signal (rather than a TCP RST).
+
+        // /ws/:bot_id — outgoing (meeting audio → client)
+        const outMatch = WS_PATH_OUT_RE.exec(url)
+        if (outMatch) {
+            const bot_id = outMatch[1]
+            const session = getSession(bot_id)
+            if (!session) {
+                wss.handleUpgrade(req, socket, head, (ws) => {
+                    ws.close(1008, 'unknown bot_id')
+                })
+                return
+            }
             wss.handleUpgrade(req, socket, head, (ws) => {
-                ws.close(1008, 'unknown bot_id')
+                const onChunk = (buf: Buffer): void => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(buf, { binary: true })
+                    }
+                }
+                session.audioStream.on('chunk', onChunk)
+                const cleanup = (): void => {
+                    session.audioStream.off('chunk', onChunk)
+                }
+                ws.on('close', cleanup)
+                ws.on('error', cleanup)
             })
             return
         }
-        wss.handleUpgrade(req, socket, head, (ws) => {
-            const onChunk = (buf: Buffer): void => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(buf, { binary: true })
-                }
+
+        // /ws_in/:bot_id — incoming (client audio → bot's mic)
+        const inMatch = WS_PATH_IN_RE.exec(url)
+        if (inMatch) {
+            const bot_id = inMatch[1]
+            const session = getSession(bot_id)
+            if (!session) {
+                wss.handleUpgrade(req, socket, head, (ws) => {
+                    ws.close(1008, 'unknown bot_id')
+                })
+                return
             }
-            session.audioStream.on('chunk', onChunk)
-            const cleanup = (): void => {
-                session.audioStream.off('chunk', onChunk)
-            }
-            ws.on('close', cleanup)
-            ws.on('error', cleanup)
-        })
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                ws.on('message', (m: unknown) => {
+                    if (m instanceof Buffer) {
+                        session.audioInject.pushInt16Buffer(m)
+                    }
+                })
+            })
+            return
+        }
+
+        // No match — destroy socket.
+        socket.destroy()
     })
 
     return wss

@@ -1,3 +1,16 @@
+// Mock child_process.spawn so the AudioInject construction inside /join
+// doesn't actually launch ffmpeg (which would fail in CI).
+jest.mock('child_process', () => ({
+    spawn: jest.fn(() => ({
+        stdin: { write: jest.fn(), end: jest.fn(), destroyed: false },
+        on: jest.fn(),
+        kill: jest.fn(),
+        pid: 99999,
+        killed: false,
+    })),
+    execSync: jest.requireActual('child_process').execSync,
+}))
+
 import request from 'supertest'
 
 import { createServer } from './app'

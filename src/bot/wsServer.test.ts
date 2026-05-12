@@ -62,6 +62,7 @@ describe('attachWebSocketServer', () => {
             bot_name: 'Max',
             startedAt: new Date(),
             audioStream: stream,
+            audioInject: {} as never,
             page: {} as never,
             close: async () => {},
         })
@@ -89,6 +90,7 @@ describe('attachWebSocketServer', () => {
             bot_name: 'Max',
             startedAt: new Date(),
             audioStream: stream,
+            audioInject: {} as never,
             page: {} as never,
             close: async () => {},
         })
@@ -113,6 +115,72 @@ describe('attachWebSocketServer', () => {
         await new Promise((r) => setTimeout(r, 100))
         expect(received).toHaveLength(1)
         expect(received[0].length).toBe(320) // 160 samples * 2 bytes Int16
+
+        ws.close()
+        await env.close()
+    })
+})
+
+describe('attachWebSocketServer — /ws_in/:bot_id (injection)', () => {
+    afterEach(() => {
+        _clearAllSessions()
+    })
+
+    it('rejects unknown bot_id with close code 1008', async () => {
+        const env = await spinUp()
+        const ws = new WebSocket(`ws://localhost:${env.port}/ws_in/nope`)
+        const code: number = await new Promise((res, rej) => {
+            ws.on('close', (c) => res(c))
+            ws.on('error', () => {
+                /* swallow */
+            })
+            setTimeout(() => rej(new Error('timeout')), 3000)
+        })
+        expect(code).toBe(1008)
+        await env.close()
+    })
+
+    it('forwards binary frames to session.audioInject.pushInt16Buffer', async () => {
+        const pushMock = jest.fn()
+        const inj = {
+            pushInt16Buffer: pushMock,
+            stop: jest.fn(),
+        }
+        const stream = new AudioStream({
+            srcSampleRate: 16000,
+            dstSampleRate: 16000,
+        })
+        registerSession({
+            bot_id: 'inj1',
+            meeting_url: 'https://meet.google.com/abc',
+            bot_name: 'Max',
+            startedAt: new Date(),
+            audioStream: stream,
+            audioInject: inj as never,
+            page: {} as never,
+            close: async () => {},
+        })
+
+        const env = await spinUp()
+        const ws = new WebSocket(`ws://localhost:${env.port}/ws_in/inj1`)
+        await new Promise<void>((res, rej) => {
+            ws.on('open', () => res())
+            ws.on('error', (e) => rej(e))
+            setTimeout(() => rej(new Error('open timeout')), 3000)
+        })
+
+        const buf = Buffer.alloc(4)
+        buf.writeInt16LE(100, 0)
+        buf.writeInt16LE(200, 2)
+        ws.send(buf, { binary: true })
+
+        // Allow the server side to receive the frame.
+        await new Promise((r) => setTimeout(r, 100))
+        expect(pushMock).toHaveBeenCalled()
+        const passed: Buffer = pushMock.mock.calls[0][0]
+        expect(passed.length).toBe(4)
+        expect(passed.readInt16LE(0)).toBe(100)
+        expect(passed.readInt16LE(2)).toBe(200)
 
         ws.close()
         await env.close()

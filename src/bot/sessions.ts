@@ -9,6 +9,7 @@
 
 import type { Page } from 'playwright'
 
+import type { AudioInject } from './audioInject'
 import type { AudioStream } from './audioStream'
 
 export interface JoinSession {
@@ -17,6 +18,7 @@ export interface JoinSession {
     bot_name: string
     startedAt: Date
     audioStream: AudioStream
+    audioInject: AudioInject
     /** Playwright Page handle — exposed so /diag/audio/:bot_id can query
      * browser-side state via page.evaluate. */
     page: Page
