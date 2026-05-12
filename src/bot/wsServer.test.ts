@@ -62,6 +62,7 @@ describe('attachWebSocketServer', () => {
             bot_name: 'Max',
             startedAt: new Date(),
             audioStream: stream,
+            page: {} as never,
             close: async () => {},
         })
 
@@ -88,6 +89,7 @@ describe('attachWebSocketServer', () => {
             bot_name: 'Max',
             startedAt: new Date(),
             audioStream: stream,
+            page: {} as never,
             close: async () => {},
         })
 

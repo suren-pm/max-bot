@@ -7,6 +7,8 @@
 // Milestone C adds `audioStream` so /ws/:bot_id can route captured
 // audio to the WebSocket client and /leave can stop the stream.
 
+import type { Page } from 'playwright'
+
 import type { AudioStream } from './audioStream'
 
 export interface JoinSession {
@@ -15,6 +17,9 @@ export interface JoinSession {
     bot_name: string
     startedAt: Date
     audioStream: AudioStream
+    /** Playwright Page handle — exposed so /diag/audio/:bot_id can query
+     * browser-side state via page.evaluate. */
+    page: Page
     /** Resolves when the underlying Playwright resources are torn down. */
     close: () => Promise<void>
 }
