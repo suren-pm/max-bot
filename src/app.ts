@@ -15,6 +15,7 @@ import { createServer as createHttpServer, Server as HttpServer } from 'http'
 import { WebSocketServer } from 'ws'
 
 import { attachAudioCapture } from './bot/audioCapture'
+import { AudioInject } from './bot/audioInject'
 import { AudioStream } from './bot/audioStream'
 import { joinMeet } from './bot/joinMeet'
 import {
@@ -175,6 +176,11 @@ export function createServerWithWs(): AppWithServer {
                 srcSampleRate: SOURCE_SAMPLE_RATE_HINT,
                 dstSampleRate: OUTPUT_SAMPLE_RATE,
             })
+            // Spawn the per-bot ffmpeg subprocess that pumps incoming
+            // /ws_in/:bot_id frames into the PulseAudio virtual_mic source.
+            const audioInject = new AudioInject({
+                sampleRate: OUTPUT_SAMPLE_RATE,
+            })
             // Set up audio capture inside joinMeet's onPageReady hook so
             // the RTCPeerConnection wrapper is in place BEFORE Meet's
             // JavaScript starts running. Without this, our wrap fires
@@ -200,9 +206,11 @@ export function createServerWithWs(): AppWithServer {
                 bot_name,
                 startedAt: new Date(),
                 audioStream,
+                audioInject,
                 page,
                 close: async () => {
                     audioStream.stop()
+                    audioInject.stop()
                     await close()
                 },
             })
@@ -236,6 +244,26 @@ export function createServerWithWs(): AppWithServer {
                 error: err instanceof Error ? err.message : String(err),
             })
         }
+    })
+
+    // Audio-injection diagnostics — reports ffmpeg subprocess state
+    // (pid, killed) for the bot's AudioInject. Useful to confirm the
+    // subprocess is alive and accepting bytes.
+    app.get('/diag/inject/:bot_id', (req: Request, res: Response) => {
+        const session = getSession(req.params.bot_id)
+        if (!session) {
+            res.status(404).json({
+                error: `no active session for bot_id=${req.params.bot_id}`,
+            })
+            return
+        }
+        const child = session.audioInject.child
+        res.status(200).json({
+            bot_id: req.params.bot_id,
+            ffmpeg_pid: child?.pid ?? null,
+            ffmpeg_killed: child?.killed ?? null,
+            ffmpeg_exit_code: child?.exitCode ?? null,
+        })
     })
 
     app.post('/leave/:bot_id', async (req: Request, res: Response) => {
