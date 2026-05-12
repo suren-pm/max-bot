@@ -87,14 +87,7 @@ fi\n\
 \n# Create virtual audio devices\n\
 pactl load-module module-null-sink sink_name=virtual_speaker \\\n\
     sink_properties=device.description=Virtual_Speaker,device.class=sound\n\
-\n# Use module-pipe-source so virtual_mic reads from a FIFO on disk that\n# ffmpeg writes to. module-virtual-source without master= silently\n# loopbacks from virtual_speaker.monitor, causing acoustic feedback:\n# every participant hears their own voice echoed back through Max.\n\
-mkdir -p /tmp/pulse && chmod 700 /tmp/pulse\n\
-rm -f /tmp/pulse/virtual_mic.fifo\n\
-mkfifo /tmp/pulse/virtual_mic.fifo\n\
-\n# module-pipe-source uses O_RDONLY | O_NONBLOCK internally, so it does\n# not block when opening the FIFO. No need to keep a dummy writer.\n# Per-bot ffmpeg writers are the actual data source; PulseAudio\n# tolerates the writerless gaps between meetings.\n# || echo guards against load failure so set -e does not kill the script.\n\
-pactl load-module module-pipe-source source_name=virtual_mic \\\n\
-    file=/tmp/pulse/virtual_mic.fifo format=s16le rate=16000 channels=1 \\\n\
-    || echo "WARN: module-pipe-source load failed"\n\
+pactl load-module module-virtual-source source_name=virtual_mic\n\
 pactl set-default-sink virtual_speaker\n\
 pactl set-default-source virtual_mic\n\
 \n\
