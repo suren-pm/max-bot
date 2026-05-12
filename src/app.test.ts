@@ -28,6 +28,7 @@ describe('max-bot HTTP server', () => {
             const fakeClose = jest.fn(async () => {})
             jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
                 bot_id: '11111111-1111-1111-1111-111111111111',
+                page: {} as never,
                 close: fakeClose,
             })
 
@@ -62,6 +63,7 @@ describe('max-bot HTTP server', () => {
         it('returns 409 when another bot is already active', async () => {
             jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
                 bot_id: '22222222-2222-2222-2222-222222222222',
+                page: {} as never,
                 close: jest.fn(async () => {}),
             })
 
@@ -99,6 +101,7 @@ describe('max-bot HTTP server', () => {
             const closeMock = jest.fn(async () => {})
             jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
                 bot_id: '33333333-3333-3333-3333-333333333333',
+                page: {} as never,
                 close: closeMock,
             })
 

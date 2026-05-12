@@ -1,3 +1,4 @@
+import { AudioStream } from './audioStream'
 import {
     _clearAllSessions,
     getSession,
@@ -6,6 +7,10 @@ import {
     registerSession,
     removeSession,
 } from './sessions'
+
+function makeAudioStream(): AudioStream {
+    return new AudioStream({ srcSampleRate: 48000, dstSampleRate: 16000 })
+}
 
 describe('bot/sessions', () => {
     afterEach(() => {
@@ -18,6 +23,7 @@ describe('bot/sessions', () => {
             meeting_url: 'https://meet.google.com/abc-defg-hij',
             bot_name: 'Max',
             startedAt: new Date('2026-05-11T00:00:00Z'),
+            audioStream: makeAudioStream(),
             close: jest.fn(async () => {}),
         }
         registerSession(session)
@@ -35,6 +41,7 @@ describe('bot/sessions', () => {
             meeting_url: 'https://meet.google.com/xyz',
             bot_name: 'Max',
             startedAt: new Date(),
+            audioStream: makeAudioStream(),
             close: jest.fn(async () => {}),
         })
         expect(hasActiveSession()).toBe(true)

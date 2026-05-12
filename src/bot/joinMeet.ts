@@ -33,6 +33,11 @@ export interface JoinMeetParams {
 
 export interface JoinResult {
     bot_id: string
+    /**
+     * Playwright Page handle for the joined meeting. Exposed so callers
+     * can attach further instrumentation (e.g. audioCapture in Milestone C).
+     */
+    page: Page
     /** Tears down the Chromium browser + context. Idempotent. */
     close: () => Promise<void>
 }
@@ -154,5 +159,5 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
         }
     }
 
-    return { bot_id, close }
+    return { bot_id, page, close }
 }

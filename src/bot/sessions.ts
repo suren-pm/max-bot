@@ -3,12 +3,18 @@
 // Milestone B scope is single-bot, but the API is shaped as a Map so
 // later milestones can lift the "one active bot" restriction without
 // rewriting callers.
+//
+// Milestone C adds `audioStream` so /ws/:bot_id can route captured
+// audio to the WebSocket client and /leave can stop the stream.
+
+import type { AudioStream } from './audioStream'
 
 export interface JoinSession {
     bot_id: string
     meeting_url: string
     bot_name: string
     startedAt: Date
+    audioStream: AudioStream
     /** Resolves when the underlying Playwright resources are torn down. */
     close: () => Promise<void>
 }
