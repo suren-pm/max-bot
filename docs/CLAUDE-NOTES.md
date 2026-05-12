@@ -146,5 +146,23 @@ After PR #4: `/diag` showed `xvfb_process: 3 Xvfb :99 ...` and `xdpyinfo` connec
 - PulseAudio is still not running (separate issue, deferred to Milestone C/D where audio actually matters)
 - Screenshot in Suren's clipboard at 10:07 AEST shows Max in the meeting room
 
+---
+
+## Milestone C — upstream audio capture inventory (C.1 notes)
+
+Read `src/meeting/shared/audio-capture.ts` (460 lines) — the upstream pattern is sophisticated and battle-tested. Key findings:
+
+- **Capture mechanism:** wraps `RTCPeerConnection` constructor in the browser. Meet streams audio over WebRTC; intercepting the constructor lets us hook every PeerConnection's `track` event, and from there connect each audio track to a `MediaStreamDestination` (the mixer).
+- **Mixing:** the browser does it. `MediaStreamDestination` accepts multiple sources via `connect()`. The mixed output is read via `MediaStreamTrackProcessor` (modern Web API — only available in Chromium 94+; check `typeof MediaStreamTrackProcessor !== 'undefined'`).
+- **Frame format:** Float32Array per frame, sample rate is whatever the WebRTC RTP stream is using (usually 48 000 Hz), `numberOfFrames` typically 480 (10 ms) or 960 (20 ms).
+- **Stereo→mono:** upstream averages channels if stereo.
+- **Frame delivery:** `window[callbackName]({audioData: Array.from(audioData), sampleRate, timestamp, numberOfFrames})` — sends as plain Array (not Float32Array — because Playwright's `exposeFunction` can't serialise typed arrays across the IPC boundary).
+- **GLOBAL coupling:** the upstream Node-side handler routes to `Streaming.instance.processMixedAudioChunk(audioChunk)` — that's the only singleton touch. Easy to remove by passing an `AudioStream` instead.
+- **Cleanup:** browser-side uses an `AbortController` to stop the stream reader. Node-side has a `stop()` helper that calls a globally-exposed `__meetAudioStop` function on the page.
+
+**Strategy:** copy the browser-side script content (~250 lines) into `src/bot/audioCapture.ts` and rewrite the Node-side wrapper to take an `AudioStream` parameter instead of touching `Streaming.instance`. Strip Teams-specific scaffolding (we're Meet-only in v1).
+
+**Plan deviation from C.5/C.6:** the plan's draft used `ScriptProcessorNode` + `createMediaElementSource`. Upstream uses `RTCPeerConnection`-interception + `MediaStreamTrackProcessor`. Upstream's approach is correct (Meet uses WebRTC, not `<audio>` elements). Will adapt the impl during C.6.
+
 
 
