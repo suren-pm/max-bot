@@ -29,6 +29,14 @@ const randomUUID = (crypto as unknown as { randomUUID: () => string })
 export interface JoinMeetParams {
     meeting_url: string
     bot_name: string
+    /**
+     * Optional hook invoked after the Playwright Page is created but
+     * BEFORE we navigate to the meeting URL. Use this for setting up
+     * inject scripts (e.g. attachAudioCapture) that need to be in place
+     * before Meet's own JavaScript runs — including its RTCPeerConnection
+     * constructor calls.
+     */
+    onPageReady?: (page: Page) => Promise<void>
 }
 
 export interface JoinResult {
@@ -129,6 +137,15 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     })
 
     const page = await context.newPage()
+
+    // CRITICAL: any inject scripts that need to observe Meet's JavaScript
+    // (e.g. wrapping RTCPeerConnection for audio capture) must be added
+    // here, BEFORE the goto. Once Meet starts running, its WebRTC setup
+    // happens early and any wrapper installed later is too late.
+    if (params.onPageReady) {
+        await params.onPageReady(page)
+    }
+
     await page.goto(params.meeting_url, {
         waitUntil: 'networkidle',
         timeout: 30000,
