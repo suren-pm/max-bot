@@ -9,6 +9,7 @@
 // from main.ts. We deliberately do NOT touch it. This file is a
 // separate, new entrypoint.
 
+import { execSync } from 'child_process'
 import express, { Application, Request, Response } from 'express'
 
 import { joinMeet } from './bot/joinMeet'
@@ -30,6 +31,43 @@ export function createServer(): Application {
             status: 'ok',
             service: 'max-bot',
             version: VERSION,
+        })
+    })
+
+    // Diagnostic endpoint — reports container state useful for debugging
+    // Playwright/Xvfb issues without needing Railway log access.
+    app.get('/diag', (_req: Request, res: Response) => {
+        const tryExec = (cmd: string): string => {
+            try {
+                return execSync(cmd, {
+                    timeout: 2000,
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                })
+                    .toString()
+                    .trim()
+            } catch (e) {
+                return `ERROR: ${e instanceof Error ? e.message : String(e)}`
+            }
+        }
+        res.status(200).json({
+            service: 'max-bot',
+            version: VERSION,
+            env: {
+                DISPLAY: process.env.DISPLAY ?? null,
+                PULSE_RUNTIME_PATH: process.env.PULSE_RUNTIME_PATH ?? null,
+                XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? null,
+                NODE_ENV: process.env.NODE_ENV ?? null,
+                SERVERLESS: process.env.SERVERLESS ?? null,
+            },
+            xvfb_process: tryExec("pgrep -a Xvfb || echo 'NOT-RUNNING'"),
+            xdpyinfo_display99: tryExec(
+                'xdpyinfo -display :99 2>&1 | head -3 || echo NO-XDPYINFO',
+            ),
+            pulse_info: tryExec('pactl info 2>&1 | head -5 || echo NO-PACTL'),
+            pulse_sources: tryExec(
+                'pactl list sources short 2>&1 | head -5 || echo NO-SOURCES',
+            ),
+            startsh_present: tryExec("ls -la /start.sh 2>&1 || echo 'NO'"),
         })
     })
 
