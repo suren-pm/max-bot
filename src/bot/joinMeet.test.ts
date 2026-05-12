@@ -67,6 +67,7 @@ describe('joinMeet', () => {
         })
 
         expect(result.bot_id).toMatch(/^[0-9a-f-]{36}$/)
+        expect(result.page).toBeDefined()
         expect(mocks.launchMock).toHaveBeenCalled()
         expect(mocks.gotoMock).toHaveBeenCalledWith(
             'https://meet.google.com/abc-defg-hij',
