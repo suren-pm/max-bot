@@ -121,6 +121,30 @@ Ready for Milestone B: Playwright join flow.
 
 - **`@types/node` is pinned at 14.x by upstream**, so `crypto.randomUUID` (Node 16+) is missing from the type declarations. Cast around it: `(crypto as unknown as { randomUUID: () => string }).randomUUID`. At runtime, Node 20 has the function.
 - **Upstream has ~18 broken Jest tests in `src/urlParser/`** (pre-existing on `main`). Confirmed they fail on `main` before my changes too. Not caused by Milestone B; not in scope to fix here.
-- **`/start.sh` boot takes ~10–20 seconds** before `app.ts` is ready (Xvfb + PulseAudio + sanity check + node). Railway's healthcheckTimeout in `railway.toml` is 60s — should be fine, but if the deploy reports healthcheck failure, bump it to 120s and re-PR.
+- **`/start.sh` boot takes ~10–20 seconds** before `app.ts` is ready (Xvfb + PulseAudio + sanity check + node). Railway's healthcheckTimeout was bumped 60→120s in the B.11 fix below.
+
+### B.11 fixes — what broke the first live test and how it was resolved
+
+First live `POST /join` to `https://meet.google.com/mmg-mjgn-njd` returned HTTP 500 with `Looks like you launched a headed browser without having a XServer running`. Two iterations to fix:
+
+**Fix 1 (PR #3): added `/diag` endpoint + explicit `DISPLAY` env pass to Playwright.**
+- `GET /diag` reports `DISPLAY`, Xvfb process, `xdpyinfo` connection, PulseAudio state — diagnosable via curl without Railway log access.
+- `chromium.launch({env: {...process.env, DISPLAY: ':99'}})` — defensive in case env wasn't being inherited.
+
+**Fix 2 (PR #4): removed `startCommand` from `railway.toml`.** This was the actual root cause.
+- `/diag` showed `xvfb_process: NOT-RUNNING` despite `/start.sh` existing in the image. That means `/start.sh` was never executed.
+- Railway treats `startCommand` in `railway.toml` as the container's exec command and that overrides the Dockerfile `ENTRYPOINT`. The `startCommand = "node build/src/app.js"` we wrote in Milestone A was bypassing `/start.sh` entirely, so Xvfb never booted.
+- Fix: delete the `startCommand` line. Railway falls back to Dockerfile `ENTRYPOINT`, which is `/start.sh`. Inside `/start.sh` the heredoc exec's `node build/src/app.js` at the end after Xvfb is up.
+- Also bumped `healthcheckTimeout` 60s → 120s to account for /start.sh boot time.
+
+After PR #4: `/diag` showed `xvfb_process: 3 Xvfb :99 ...` and `xdpyinfo` connected. Retried `POST /join` — Max appeared in the meeting (admitted past the waiting room because Suren is the meeting host).
+
+### Acceptance — 2026-05-11
+
+- Live TEST meeting URL: `https://meet.google.com/mmg-mjgn-njd`
+- Bot "Max" successfully joined the meeting visible in the Contributors panel
+- PulseAudio is still not running (separate issue, deferred to Milestone C/D where audio actually matters)
+- Screenshot in Suren's clipboard at 10:07 AEST shows Max in the meeting room
+
 
 
