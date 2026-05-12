@@ -98,6 +98,56 @@ export function createServerWithWs(): AppWithServer {
         })
     })
 
+    // Deep PulseAudio diagnostic — used to root-cause why pulseaudio
+    // refuses to start in our container. Front-loaded for Milestone D.
+    app.get('/diag/pulse', (_req: Request, res: Response) => {
+        const tryExec = (cmd: string): string => {
+            try {
+                return execSync(cmd, {
+                    timeout: 3000,
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                })
+                    .toString()
+                    .trim()
+            } catch (e) {
+                return `ERROR: ${e instanceof Error ? e.message : String(e)}`
+            }
+        }
+        res.status(200).json({
+            env: {
+                PULSE_RUNTIME_PATH: process.env.PULSE_RUNTIME_PATH ?? null,
+                XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? null,
+                DBUS_SESSION_BUS_ADDRESS:
+                    process.env.DBUS_SESSION_BUS_ADDRESS ?? null,
+                USER: process.env.USER ?? null,
+                HOME: process.env.HOME ?? null,
+            },
+            whoami: tryExec('whoami'),
+            pulse_processes: tryExec('pgrep -a pulseaudio || echo NONE'),
+            pulse_check: tryExec(
+                'pulseaudio --check 2>&1; echo "exitcode=$?"',
+            ),
+            runtime_dir_listing: tryExec(
+                'ls -la /tmp/pulse 2>&1 || echo MISSING',
+            ),
+            dbus_socket: tryExec(
+                'ls -la /run/dbus/system_bus_socket 2>&1 || echo MISSING',
+            ),
+            dbus_processes: tryExec(
+                'pgrep -a dbus-daemon || echo NONE',
+            ),
+            pulse_log_search: tryExec(
+                "find /tmp /root /var/log -name 'pulse*.log' 2>/dev/null | head -5 || echo NONE",
+            ),
+            machine_id: tryExec('cat /etc/machine-id 2>&1 || cat /var/lib/dbus/machine-id 2>&1'),
+            // Try to start pulseaudio in foreground for 1 second to capture
+            // its actual error message.
+            try_start_short: tryExec(
+                'timeout 2 pulseaudio --start --log-target=stderr --log-level=info -vvvv 2>&1 | head -30',
+            ),
+        })
+    })
+
     app.post('/join', async (req: Request, res: Response) => {
         const { meeting_url, bot_name } = req.body ?? {}
 
