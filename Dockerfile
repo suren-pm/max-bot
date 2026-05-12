@@ -91,8 +91,14 @@ pactl load-module module-null-sink sink_name=virtual_speaker \\\n\
 mkdir -p /tmp/pulse && chmod 700 /tmp/pulse\n\
 rm -f /tmp/pulse/virtual_mic.fifo\n\
 mkfifo /tmp/pulse/virtual_mic.fifo\n\
+\n# Keep a dummy writer on the FIFO so module-pipe-source can open() it\n# for reading without blocking (some PulseAudio versions block on open\n# if no writer exists). sleep infinity will hold the FD open for the\n# script's lifetime; per-bot ffmpeg writers are the actual data source.\n\
+sleep infinity > /tmp/pulse/virtual_mic.fifo &\n\
+DUMMY_WRITER_PID=$!\n\
+sleep 0.5\n\
+\n# load-module without set -e: if it fails, log and continue so /health works\n\
 pactl load-module module-pipe-source source_name=virtual_mic \\\n\
-    file=/tmp/pulse/virtual_mic.fifo format=s16le rate=16000 channels=1\n\
+    file=/tmp/pulse/virtual_mic.fifo format=s16le rate=16000 channels=1 \\\n\
+    || echo "WARN: module-pipe-source load failed"\n\
 pactl set-default-sink virtual_speaker\n\
 pactl set-default-source virtual_mic\n\
 \n\
