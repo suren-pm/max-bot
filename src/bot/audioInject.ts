@@ -15,8 +15,11 @@ import { EventEmitter } from 'events'
 
 export interface AudioInjectOptions {
     sampleRate: number
-    /** PulseAudio source name. Default 'virtual_mic'. */
-    pulseDevice?: string
+    /**
+     * Path to the FIFO PulseAudio's pipe-source reads from.
+     * /start.sh creates this with mkfifo before loading module-pipe-source.
+     */
+    fifoPath?: string
 }
 
 export class AudioInject extends EventEmitter {
@@ -26,11 +29,16 @@ export class AudioInject extends EventEmitter {
 
     constructor(opts: AudioInjectOptions) {
         super()
-        const device = opts.pulseDevice ?? 'virtual_mic'
-        // Use native PulseAudio output (-f pulse) rather than going through
-        // ALSA's pulse plugin (-f alsa pulse:foo) which requires
-        // libasound2-plugins. -f pulse uses libpulse directly which is
-        // already installed via pulseaudio-utils.
+        const fifo = opts.fifoPath ?? '/tmp/pulse/virtual_mic.fifo'
+        // Write Int16 s16le raw audio to the FIFO. PulseAudio's
+        // module-pipe-source reads from that FIFO and exposes it as the
+        // virtual_mic source which Chrome's getUserMedia uses.
+        //
+        // Why a FIFO instead of -f pulse:
+        //   module-virtual-source without master= silently loopbacks from
+        //   virtual_speaker.monitor, causing acoustic feedback (Suren hears
+        //   his own voice through Max). module-pipe-source has no such
+        //   loopback path — bytes only come from the FIFO.
         const args = [
             '-loglevel',
             'warning',
@@ -43,8 +51,12 @@ export class AudioInject extends EventEmitter {
             '-i',
             '-',
             '-f',
-            'pulse',
-            device,
+            's16le',
+            '-ar',
+            '16000',
+            '-ac',
+            '1',
+            fifo,
         ]
         this.child = spawn('ffmpeg', args, {
             stdio: ['pipe', 'pipe', 'pipe'],
