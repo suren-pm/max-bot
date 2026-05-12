@@ -3,6 +3,7 @@
 jest.mock('child_process', () => ({
     spawn: jest.fn(() => ({
         stdin: { write: jest.fn(), end: jest.fn(), destroyed: false },
+        stderr: { on: jest.fn() },
         on: jest.fn(),
         kill: jest.fn(),
         pid: 99999,

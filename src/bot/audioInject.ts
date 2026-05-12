@@ -15,17 +15,22 @@ import { EventEmitter } from 'events'
 
 export interface AudioInjectOptions {
     sampleRate: number
-    /** PulseAudio source target via ALSA plugin. Default 'pulse:virtual_mic'. */
-    alsaDevice?: string
+    /** PulseAudio source name. Default 'virtual_mic'. */
+    pulseDevice?: string
 }
 
 export class AudioInject extends EventEmitter {
     public readonly child: ChildProcess
+    public stderrTail: string[] = []
     private stopped = false
 
     constructor(opts: AudioInjectOptions) {
         super()
-        const device = opts.alsaDevice ?? 'pulse:virtual_mic'
+        const device = opts.pulseDevice ?? 'virtual_mic'
+        // Use native PulseAudio output (-f pulse) rather than going through
+        // ALSA's pulse plugin (-f alsa pulse:foo) which requires
+        // libasound2-plugins. -f pulse uses libpulse directly which is
+        // already installed via pulseaudio-utils.
         const args = [
             '-loglevel',
             'warning',
@@ -38,13 +43,20 @@ export class AudioInject extends EventEmitter {
             '-i',
             '-',
             '-f',
-            'alsa',
-            '-acodec',
-            'pcm_s16le',
+            'pulse',
             device,
         ]
         this.child = spawn('ffmpeg', args, {
             stdio: ['pipe', 'pipe', 'pipe'],
+        })
+        // Capture stderr so /diag/inject can surface why ffmpeg died.
+        this.child.stderr?.on('data', (chunk: Buffer) => {
+            const text = chunk.toString()
+            this.stderrTail.push(text)
+            // Keep only the last ~10 lines worth.
+            if (this.stderrTail.length > 20) {
+                this.stderrTail.splice(0, this.stderrTail.length - 20)
+            }
         })
         this.child.on('error', (err) => this.emit('error', err))
         this.child.on('exit', (code) => this.emit('exit', code ?? -1))
