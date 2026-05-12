@@ -72,16 +72,16 @@ unclutter -display :99 -idle 0 -root &\n\
 \n# Start VNC server for debugging with cursor disabled\n\
 x11vnc -display :99 -forever -passwd debug -listen 0.0.0.0 -rfbport 5900 \\\n    -shared -noxdamage -noxfixes -noscr -fixscreen 3 -bg -o /tmp/x11vnc.log \\\n    -nocursor -noxfixes -nomodtweak &\n\
 VNC_PID=$!\n\
-\n# Initialize PulseAudio\n\
-pulseaudio --start --log-target=stderr --log-level=notice &\n\
-PULSE_PID=$!\n\
-sleep 4\n\
-\n# Ensure PulseAudio is ready\n\
+\n# Initialize PulseAudio. Drop --start (which exits when autospawn=no in\n# /etc/pulse/client.conf, the default in this container) and use\n# --daemonize=yes instead which unconditionally forks into the background.\n# --exit-idle-time=-1 prevents the daemon from quitting when no clients are\n# connected. The "not intended to be run as root" warning is harmless.\n\
+mkdir -p /tmp/pulse && chmod 700 /tmp/pulse\n\
+pulseaudio --daemonize=yes --exit-idle-time=-1 --log-target=stderr --log-level=info\n\
+sleep 3\n\
+\n# Ensure PulseAudio is ready (retry once)\n\
 if ! pactl info >/dev/null 2>&1; then\n\
-    pulseaudio --kill || true\n\
+    echo "PulseAudio not responding, retrying..."\n\
+    pulseaudio --kill 2>/dev/null || true\n\
     sleep 2\n\
-    pulseaudio --start --log-target=stderr --log-level=notice &\n\
-    PULSE_PID=$!\n\
+    pulseaudio --daemonize=yes --exit-idle-time=-1 --log-target=stderr --log-level=info\n\
     sleep 3\n\
 fi\n\
 \n# Create virtual audio devices\n\
@@ -89,6 +89,7 @@ pactl load-module module-null-sink sink_name=virtual_speaker \\\n\
     sink_properties=device.description=Virtual_Speaker,device.class=sound\n\
 pactl load-module module-virtual-source source_name=virtual_mic\n\
 pactl set-default-sink virtual_speaker\n\
+pactl set-default-source virtual_mic\n\
 \n\
 # Optimize audio quality and latency\n\
 pactl set-sink-volume virtual_speaker 100%\n\
