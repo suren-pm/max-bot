@@ -148,6 +148,22 @@ After PR #4: `/diag` showed `xvfb_process: 3 Xvfb :99 ...` and `xdpyinfo` connec
 
 ---
 
+## Milestone D v2 — Accepted 2026-05-13
+
+- Live URL: `wss://max-bot-production-7455.up.railway.app/ws_in/:bot_id` (injection) + `wss://.../ws/:bot_id` (capture)
+- Acceptance: (a) Suren heard no echo of his own voice through Max — loopback fixed (b) capture path verified end-to-end with `/Users/surendrankandasamy/Documents/max-bot-capture-fresh2.wav` showing full-scale audio of Suren speaking
+- Architecture: two null-sinks (`virtual_speaker`, `virtual_mic_input`) + `module-virtual-source virtual_mic master=virtual_mic_input.monitor`. ffmpeg writes to `pulse:virtual_mic_input` via `-f pulse`. virtual_mic_input.monitor feeds virtual_mic which Chrome reads as Max's outgoing mic. No FIFO, no module-pipe-source.
+
+### Lessons that produced this fix
+
+- The D v1 failures (PRs #14–#17 + revert) chased the wrong solution: `module-pipe-source` with FIFOs. Five PRs of attempts; never reached a working state.
+- The actual fix turned out to be one extra null-sink + one `master=` argument on the existing virtual-source. Net Dockerfile diff: +7 −3.
+- Root cause was visible the whole time: `module-virtual-source` is a FILTER reading from a master, not a writable target. With no explicit `master=` argument, PulseAudio picked the system default source (`virtual_speaker.monitor`), creating the loopback Suren correctly identified by ear.
+
+Ready for Milestone E: max-brain integration.
+
+---
+
 ## Milestone C — upstream audio capture inventory (C.1 notes)
 
 Read `src/meeting/shared/audio-capture.ts` (460 lines) — the upstream pattern is sophisticated and battle-tested. Key findings:
