@@ -16,10 +16,11 @@ import { EventEmitter } from 'events'
 export interface AudioInjectOptions {
     sampleRate: number
     /**
-     * Path to the FIFO PulseAudio's pipe-source reads from.
-     * /start.sh creates this with mkfifo before loading module-pipe-source.
+     * PulseAudio sink name to write audio into. Default 'virtual_mic_input'.
+     * The sinks monitor is the master of the virtual_mic source, so audio
+     * written here surfaces as Max microphone in Chrome getUserMedia.
      */
-    fifoPath?: string
+    pulseSink?: string
 }
 
 export class AudioInject extends EventEmitter {
@@ -29,16 +30,22 @@ export class AudioInject extends EventEmitter {
 
     constructor(opts: AudioInjectOptions) {
         super()
-        const fifo = opts.fifoPath ?? '/tmp/pulse/virtual_mic.fifo'
-        // Write Int16 s16le raw audio to the FIFO. PulseAudio's
-        // module-pipe-source reads from that FIFO and exposes it as the
-        // virtual_mic source which Chrome's getUserMedia uses.
+        const sink = opts.pulseSink ?? 'virtual_mic_input'
+        // Write Float32 audio into a PulseAudio sink. The sink is a
+        // null-sink in /start.sh whose monitor is set as the master of
+        // the virtual_mic source. Chrome getUserMedia reads from
+        // virtual_mic, so what we write here becomes Max mic.
         //
-        // Why a FIFO instead of -f pulse:
-        //   module-virtual-source without master= silently loopbacks from
-        //   virtual_speaker.monitor, causing acoustic feedback (Suren hears
-        //   his own voice through Max). module-pipe-source has no such
-        //   loopback path — bytes only come from the FIFO.
+        // Why a sink (not module-pipe-source / FIFO): Milestone D v1
+        // attempted module-pipe-source with FIFOs; that approach hit a
+        // PulseAudio startup failure we could not root-cause in 5 PRs.
+        // The null-sink-monitor to virtual-source pattern is canonical
+        // PulseAudio and avoids that whole class of problem.
+        //
+        // Why -f pulse (not -f alsa pulse:foo): libasound2-plugins is
+        // not installed in the upstream Dockerfile, so the ALSA pulse
+        // plugin is not available. -f pulse uses libpulse directly,
+        // which IS installed via pulseaudio-utils.
         const args = [
             '-loglevel',
             'warning',
@@ -51,12 +58,8 @@ export class AudioInject extends EventEmitter {
             '-i',
             '-',
             '-f',
-            's16le',
-            '-ar',
-            '16000',
-            '-ac',
-            '1',
-            fifo,
+            'pulse',
+            sink,
         ]
         this.child = spawn('ffmpeg', args, {
             stdio: ['pipe', 'pipe', 'pipe'],
