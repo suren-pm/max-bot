@@ -18,6 +18,7 @@ import { attachAudioCapture } from './bot/audioCapture'
 import { AudioInject } from './bot/audioInject'
 import { AudioStream } from './bot/audioStream'
 import { joinMeet } from './bot/joinMeet'
+import { MaxBrainBridge } from './bot/maxBrainBridge'
 import {
     getSession,
     hasActiveSession,
@@ -200,6 +201,18 @@ export function createServerWithWs(): AppWithServer {
                     }
                 },
             })
+            // Open the outbound WebSocket to max-brain. When
+            // MAX_BRAIN_WS_URL is unset (local dev), bridge harmlessly
+            // attempts ws://localhost:0/${bot_id} and stays disconnected;
+            // does not affect the rest of the /join flow.
+            const maxBrainWsUrl =
+                process.env.MAX_BRAIN_WS_URL ?? 'ws://localhost:0'
+            const maxBrainBridge = new MaxBrainBridge({
+                wsUrl: maxBrainWsUrl,
+                botId: bot_id,
+                audioStream,
+                audioInject,
+            })
             registerSession({
                 bot_id,
                 meeting_url,
@@ -207,8 +220,10 @@ export function createServerWithWs(): AppWithServer {
                 startedAt: new Date(),
                 audioStream,
                 audioInject,
+                maxBrainBridge,
                 page,
                 close: async () => {
+                    maxBrainBridge.stop()
                     audioStream.stop()
                     audioInject.stop()
                     await close()
