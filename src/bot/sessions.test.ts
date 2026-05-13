@@ -25,6 +25,7 @@ describe('bot/sessions', () => {
             startedAt: new Date('2026-05-11T00:00:00Z'),
             audioStream: makeAudioStream(),
             audioInject: {} as never,
+            maxBrainBridge: {} as never,
             page: {} as never,
             close: jest.fn(async () => {}),
         }
@@ -45,6 +46,7 @@ describe('bot/sessions', () => {
             startedAt: new Date(),
             audioStream: makeAudioStream(),
             audioInject: {} as never,
+            maxBrainBridge: {} as never,
             page: {} as never,
             close: jest.fn(async () => {}),
         })

@@ -12,6 +12,17 @@ jest.mock('child_process', () => ({
     execSync: jest.requireActual('child_process').execSync,
 }))
 
+// Mock MaxBrainBridge so /join's outbound WS attempt doesn't try to
+// connect to max-brain during unit tests.
+jest.mock('./bot/maxBrainBridge', () => {
+    return {
+        MaxBrainBridge: jest.fn().mockImplementation(() => ({
+            stop: jest.fn(),
+            isConnected: jest.fn(() => false),
+        })),
+    }
+})
+
 import request from 'supertest'
 
 import { createServer } from './app'

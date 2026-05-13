@@ -63,6 +63,7 @@ describe('attachWebSocketServer', () => {
             startedAt: new Date(),
             audioStream: stream,
             audioInject: {} as never,
+            maxBrainBridge: {} as never,
             page: {} as never,
             close: async () => {},
         })
@@ -91,6 +92,7 @@ describe('attachWebSocketServer', () => {
             startedAt: new Date(),
             audioStream: stream,
             audioInject: {} as never,
+            maxBrainBridge: {} as never,
             page: {} as never,
             close: async () => {},
         })
@@ -157,6 +159,7 @@ describe('attachWebSocketServer — /ws_in/:bot_id (injection)', () => {
             startedAt: new Date(),
             audioStream: stream,
             audioInject: inj as never,
+            maxBrainBridge: {} as never,
             page: {} as never,
             close: async () => {},
         })

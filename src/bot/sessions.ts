@@ -11,6 +11,7 @@ import type { Page } from 'playwright'
 
 import type { AudioInject } from './audioInject'
 import type { AudioStream } from './audioStream'
+import type { MaxBrainBridge } from './maxBrainBridge'
 
 export interface JoinSession {
     bot_id: string
@@ -19,6 +20,10 @@ export interface JoinSession {
     startedAt: Date
     audioStream: AudioStream
     audioInject: AudioInject
+    /** WebSocket bridge to max-brain — opens an outbound connection
+     * mimicking MBaaS's client pattern. May be a no-op when
+     * MAX_BRAIN_WS_URL env var is unset (local tests / standalone). */
+    maxBrainBridge: MaxBrainBridge
     /** Playwright Page handle — exposed so /diag/audio/:bot_id can query
      * browser-side state via page.evaluate. */
     page: Page
