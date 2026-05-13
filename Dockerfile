@@ -87,9 +87,13 @@ fi\n\
 \n# Create virtual audio devices\n\
 pactl load-module module-null-sink sink_name=virtual_speaker \\\n\
     sink_properties=device.description=Virtual_Speaker,device.class=sound\n\
-pactl load-module module-virtual-source source_name=virtual_mic\n\
-pactl set-default-sink virtual_speaker\n\
-pactl set-default-source virtual_mic\n\
+\n# Second null-sink dedicated to mic injection. Its monitor becomes the\n# master of virtual_mic, so audio written via pulse:virtual_mic_input\n# surfaces in Chrome getUserMedia. Without this and the explicit\n# master= below, virtual_mic defaults to monitoring virtual_speaker,\n# causing the meeting incoming audio to loopback as Max outgoing.\n\
+pactl load-module module-null-sink sink_name=virtual_mic_input \\\n\
+    sink_properties=device.description=Virtual_Mic_Input,device.class=sound\n\
+pactl load-module module-virtual-source source_name=virtual_mic \\\n\
+    master=virtual_mic_input.monitor\n\
+pactl set-default-sink virtual_speaker || true\n\
+pactl set-default-source virtual_mic || true\n\
 \n\
 # Optimize audio quality and latency\n\
 pactl set-sink-volume virtual_speaker 100%\n\
