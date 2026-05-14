@@ -29,6 +29,16 @@ export class MaxBrainBridge {
     private readonly onChunk: (buf: Buffer) => void
     private reconnectAttempts = 0
     private readonly maxReconnects = 5
+    /** Diagnostic counters — exposed via app.ts /diag for live debugging. */
+    public bytesReceivedFromBrain = 0
+    public messagesReceivedFromBrain = 0
+    public bytesSentToBrain = 0
+    public chunksSentToBrain = 0
+    public lastConnectError: string | null = null
+    public lastOpenAt: number | null = null
+    public lastCloseAt: number | null = null
+    public lastCloseCode: number | null = null
+    public lastMessageAt: number | null = null
 
     constructor(opts: MaxBrainBridgeOptions) {
         this.fullUrl = `${opts.wsUrl}/${opts.botId}`
@@ -41,6 +51,8 @@ export class MaxBrainBridge {
                 this.ws.readyState === WebSocket.OPEN
             ) {
                 this.ws.send(buf, { binary: true })
+                this.bytesSentToBrain += buf.length
+                this.chunksSentToBrain += 1
             }
         }
         this.audioStream.on('chunk', this.onChunk)
@@ -52,27 +64,37 @@ export class MaxBrainBridge {
         try {
             this.ws = new WebSocket(this.fullUrl)
         } catch (err) {
+            this.lastConnectError =
+                err instanceof Error ? err.message : String(err)
             this.scheduleReconnect()
             return
         }
 
         this.ws.on('open', () => {
             this.reconnectAttempts = 0
+            this.lastOpenAt = Date.now()
+            this.lastConnectError = null
         })
 
         this.ws.on('message', (m: unknown) => {
+            this.messagesReceivedFromBrain += 1
+            this.lastMessageAt = Date.now()
             if (m instanceof Buffer) {
+                this.bytesReceivedFromBrain += m.length
                 this.audioInject.pushInt16Buffer(m)
             }
         })
 
-        this.ws.on('close', () => {
+        this.ws.on('close', (code: number) => {
+            this.lastCloseAt = Date.now()
+            this.lastCloseCode = code
             if (!this.stopped) {
                 this.scheduleReconnect()
             }
         })
 
-        this.ws.on('error', () => {
+        this.ws.on('error', (err: Error) => {
+            this.lastConnectError = err.message
             // Errors trigger 'close' afterwards; reconnect logic lives there.
         })
     }

@@ -282,6 +282,33 @@ export function createServerWithWs(): AppWithServer {
         })
     })
 
+    // MaxBrainBridge diagnostics — bytes in/out, connection state.
+    // Critical for diagnosing whether max-brain is actually sending
+    // TTS audio bytes back over the WS bridge.
+    app.get('/diag/bridge/:bot_id', (req: Request, res: Response) => {
+        const session = getSession(req.params.bot_id)
+        if (!session) {
+            res.status(404).json({
+                error: `no active session for bot_id=${req.params.bot_id}`,
+            })
+            return
+        }
+        const b = session.maxBrainBridge
+        res.status(200).json({
+            bot_id: req.params.bot_id,
+            connected: b.isConnected(),
+            bytesReceivedFromBrain: b.bytesReceivedFromBrain,
+            messagesReceivedFromBrain: b.messagesReceivedFromBrain,
+            bytesSentToBrain: b.bytesSentToBrain,
+            chunksSentToBrain: b.chunksSentToBrain,
+            lastOpenAt: b.lastOpenAt,
+            lastCloseAt: b.lastCloseAt,
+            lastCloseCode: b.lastCloseCode,
+            lastMessageAt: b.lastMessageAt,
+            lastConnectError: b.lastConnectError,
+        })
+    })
+
     app.post('/leave/:bot_id', async (req: Request, res: Response) => {
         const { bot_id } = req.params
         const session = getSession(bot_id)
