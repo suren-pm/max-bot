@@ -309,6 +309,8 @@ export function createServerWithWs(): AppWithServer {
         res.status(200).json({
             bot_id: req.params.bot_id,
             connected: b.isConnected(),
+            disconnectedSince: b.disconnectedSince,
+            heartbeatReconnects: b.heartbeatReconnects,
             bytesReceivedFromBrain: b.bytesReceivedFromBrain,
             messagesReceivedFromBrain: b.messagesReceivedFromBrain,
             bytesSentToBrain: b.bytesSentToBrain,

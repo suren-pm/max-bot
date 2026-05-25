@@ -19,6 +19,17 @@ jest.mock('./bot/maxBrainBridge', () => {
         MaxBrainBridge: jest.fn().mockImplementation(() => ({
             stop: jest.fn(),
             isConnected: jest.fn(() => false),
+            disconnectedSince: null,
+            heartbeatReconnects: 0,
+            bytesReceivedFromBrain: 0,
+            messagesReceivedFromBrain: 0,
+            bytesSentToBrain: 0,
+            chunksSentToBrain: 0,
+            lastOpenAt: null,
+            lastCloseAt: null,
+            lastCloseCode: null,
+            lastMessageAt: null,
+            lastConnectError: null,
         })),
     }
 })

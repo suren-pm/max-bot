@@ -224,4 +224,73 @@ describe('MaxBrainBridge', () => {
         bridge.stop()
         await env1.close()
     })
+
+    it('sets disconnectedSince when ws closes, clears on reopen', async () => {
+        const env = await spinUpFakeBrain()
+        const stream = new AudioStream({
+            srcSampleRate: 16000,
+            dstSampleRate: 16000,
+        })
+        const inject = {
+            pushInt16Buffer: jest.fn(),
+            stop: jest.fn(),
+        } as unknown as { pushInt16Buffer: jest.Mock; stop: jest.Mock }
+
+        let serverWs: WebSocket | null = null
+        env.wss.on('connection', (ws) => {
+            serverWs = ws
+        })
+
+        const bridge = new MaxBrainBridge({
+            wsUrl: `ws://localhost:${env.port}`,
+            botId: 'disc-test',
+            audioStream: stream,
+            audioInject: inject as never,
+        })
+        await new Promise((r) => setTimeout(r, 150))
+        expect(bridge.disconnectedSince).toBeNull()
+
+        serverWs!.close()
+        await new Promise((r) => setTimeout(r, 150))
+        expect(bridge.disconnectedSince).not.toBeNull()
+        expect((bridge.disconnectedSince as number) > 0).toBe(true)
+
+        bridge.stop()
+        await env.close()
+    })
+
+    it('heartbeat force-reconnects after staleness threshold', async () => {
+        const env = await spinUpFakeBrain()
+        const stream = new AudioStream({
+            srcSampleRate: 16000,
+            dstSampleRate: 16000,
+        })
+        const inject = {
+            pushInt16Buffer: jest.fn(),
+            stop: jest.fn(),
+        } as unknown as { pushInt16Buffer: jest.Mock; stop: jest.Mock }
+
+        const bridge = new MaxBrainBridge({
+            wsUrl: `ws://localhost:${env.port}`,
+            botId: 'hb-test',
+            audioStream: stream,
+            audioInject: inject as never,
+            heartbeatStalenessMs: 200,
+            heartbeatIntervalMs: 50,
+        })
+        // Let connection establish
+        await new Promise((r) => setTimeout(r, 150))
+        expect(bridge.heartbeatReconnects).toBe(0)
+
+        // Simulate staleness: pretend last message was long ago
+        ;(bridge as unknown as { lastMessageAt: number }).lastMessageAt =
+            Date.now() - 5000
+
+        // Wait one heartbeat tick
+        await new Promise((r) => setTimeout(r, 150))
+        expect(bridge.heartbeatReconnects).toBeGreaterThanOrEqual(1)
+
+        bridge.stop()
+        await env.close()
+    })
 })
