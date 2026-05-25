@@ -130,6 +130,22 @@ describe('max-bot HTTP server', () => {
             expect(res.status).toBe(500)
             expect(res.body.error).toMatch(/boom/)
         })
+
+        it('passes onPageDeath callback through to joinMeet', async () => {
+            const joinSpy = jest.spyOn(joinMeetModule, 'joinMeet')
+                .mockResolvedValue({
+                    bot_id: 'pd-bot',
+                    page: {} as never,
+                    close: jest.fn(async () => {}),
+                })
+            const app = createServer()
+            await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            const callArg = joinSpy.mock.calls[0][0]
+            expect(typeof callArg.onPageDeath).toBe('function')
+        })
     })
 
     describe('POST /leave/:bot_id', () => {

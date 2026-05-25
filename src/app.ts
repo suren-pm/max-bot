@@ -198,6 +198,7 @@ export function createServerWithWs(): AppWithServer {
             // the RTCPeerConnection wrapper is in place BEFORE Meet's
             // JavaScript starts running. Without this, our wrap fires
             // too late and the audio tracks bypass our mixer.
+            let resolvedBotId: string | null = null
             const { bot_id, page, close } = await joinMeet({
                 meeting_url,
                 bot_name,
@@ -212,7 +213,29 @@ export function createServerWithWs(): AppWithServer {
                         )
                     }
                 },
+                onPageDeath: (event) => {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                        `[page death] bot=${resolvedBotId ?? '?'} reason=${event.reason}`,
+                    )
+                    recordPostmortem({
+                        kind: 'playwright_page',
+                        pid: null,
+                        exitCode: null,
+                        signal: event.reason,
+                        stderrTail: `Playwright page emitted ${event.reason}`,
+                    })
+                    // Auto-cleanup: trigger session.close() asynchronously.
+                    const dead = resolvedBotId
+                        ? getSession(resolvedBotId)
+                        : undefined
+                    if (dead) {
+                        dead.close().catch(() => {})
+                        removeSession(resolvedBotId!)
+                    }
+                },
             })
+            resolvedBotId = bot_id
             // Open the outbound WebSocket to max-brain. When
             // MAX_BRAIN_WS_URL is unset (local dev), bridge harmlessly
             // attempts ws://localhost:0/${bot_id} and stays disconnected;

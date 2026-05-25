@@ -108,3 +108,63 @@ describe('joinMeet', () => {
         ).rejects.toThrow(/google meet/i)
     })
 })
+
+describe('joinMeet onPageDeath callback', () => {
+    it('fires onPageDeath when page.on(close) event fires', async () => {
+        // We can't easily test the real Playwright path in jest without
+        // a real browser, so we test the wiring helper directly.
+        const { wirePageDeath } = await import('./joinMeet')
+        const deathHandler = jest.fn()
+        const fakePage = {
+            isClosed: jest.fn(() => false),
+            on: jest.fn((event: string, cb: () => void) => {
+                if (event === 'close') {
+                    // Simulate Playwright firing close
+                    setTimeout(cb, 10)
+                }
+            }),
+        } as unknown as import('playwright').Page
+
+        wirePageDeath(fakePage, deathHandler)
+        await new Promise((r) => setTimeout(r, 50))
+        expect(deathHandler).toHaveBeenCalledWith({
+            reason: 'page_closed',
+        })
+    })
+
+    it('fires onPageDeath when page.on(crash) event fires', async () => {
+        const { wirePageDeath } = await import('./joinMeet')
+        const deathHandler = jest.fn()
+        const fakePage = {
+            isClosed: jest.fn(() => false),
+            on: jest.fn((event: string, cb: () => void) => {
+                if (event === 'crash') {
+                    setTimeout(cb, 10)
+                }
+            }),
+        } as unknown as import('playwright').Page
+
+        wirePageDeath(fakePage, deathHandler)
+        await new Promise((r) => setTimeout(r, 50))
+        expect(deathHandler).toHaveBeenCalledWith({
+            reason: 'page_crash',
+        })
+    })
+
+    it('fires onPageDeath at most once even if both events fire', async () => {
+        const { wirePageDeath } = await import('./joinMeet')
+        const deathHandler = jest.fn()
+        const fakePage = {
+            isClosed: jest.fn(() => false),
+            on: jest.fn((event: string, cb: () => void) => {
+                if (event === 'close' || event === 'crash') {
+                    setTimeout(cb, 10)
+                }
+            }),
+        } as unknown as import('playwright').Page
+
+        wirePageDeath(fakePage, deathHandler)
+        await new Promise((r) => setTimeout(r, 80))
+        expect(deathHandler).toHaveBeenCalledTimes(1)
+    })
+})

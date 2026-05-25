@@ -26,6 +26,35 @@ import {
 const randomUUID = (crypto as unknown as { randomUUID: () => string })
     .randomUUID
 
+export type PageDeathReason = 'page_closed' | 'page_crash'
+
+export interface PageDeath {
+    reason: PageDeathReason
+}
+
+/**
+ * Attach `close` and `crash` listeners to a Playwright Page; invoke
+ * the callback (at most once) on either. Exposed for unit testing
+ * without needing a real Chromium instance.
+ */
+export function wirePageDeath(
+    page: import('playwright').Page,
+    onDeath: (event: PageDeath) => void,
+): void {
+    let fired = false
+    const fire = (reason: PageDeathReason) => {
+        if (fired) return
+        fired = true
+        try {
+            onDeath({ reason })
+        } catch {
+            /* ignore */
+        }
+    }
+    page.on('close', () => fire('page_closed'))
+    page.on('crash', () => fire('page_crash'))
+}
+
 export interface JoinMeetParams {
     meeting_url: string
     bot_name: string
@@ -37,6 +66,12 @@ export interface JoinMeetParams {
      * constructor calls.
      */
     onPageReady?: (page: Page) => Promise<void>
+    /**
+     * Invoked when Playwright's page emits `close` or `crash`. The
+     * page can no longer be used after this fires. Callers should
+     * tear down the session.
+     */
+    onPageDeath?: (event: PageDeath) => void
 }
 
 export interface JoinResult {
@@ -143,6 +178,10 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     })
 
     const page = await context.newPage()
+
+    if (params.onPageDeath) {
+        wirePageDeath(page, params.onPageDeath)
+    }
 
     // CRITICAL: any inject scripts that need to observe Meet's JavaScript
     // (e.g. wrapping RTCPeerConnection for audio capture) must be added
