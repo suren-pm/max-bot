@@ -47,8 +47,11 @@ export class AudioInject extends EventEmitter {
         // plugin is not available. -f pulse uses libpulse directly,
         // which IS installed via pulseaudio-utils.
         const args = [
+            // Bumped to 'info' so /diag/inject's stderr tail shows the
+            // actual pulse-connection state. Milestone E silent-failure
+            // debug. Revert to 'warning' once root-caused.
             '-loglevel',
-            'warning',
+            'info',
             '-f',
             'f32le',
             '-ar',
@@ -64,13 +67,13 @@ export class AudioInject extends EventEmitter {
         this.child = spawn('ffmpeg', args, {
             stdio: ['pipe', 'pipe', 'pipe'],
         })
-        // Capture stderr so /diag/inject can surface why ffmpeg died.
+        // Capture stderr so /diag/inject can surface what ffmpeg is doing.
+        // Bumped retention to 200 chunks during Milestone E debug.
         this.child.stderr?.on('data', (chunk: Buffer) => {
             const text = chunk.toString()
             this.stderrTail.push(text)
-            // Keep only the last ~10 lines worth.
-            if (this.stderrTail.length > 20) {
-                this.stderrTail.splice(0, this.stderrTail.length - 20)
+            if (this.stderrTail.length > 200) {
+                this.stderrTail.splice(0, this.stderrTail.length - 200)
             }
         })
         this.child.on('error', (err) => this.emit('error', err))
