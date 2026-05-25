@@ -39,6 +39,9 @@ export class MaxBrainBridge {
     public lastCloseAt: number | null = null
     public lastCloseCode: number | null = null
     public lastMessageAt: number | null = null
+    // Test-only: every WS we abandon (because we're reconnecting) is
+    // recorded here so tests can assert all listeners were detached.
+    public _testDeadSockets: WebSocket[] = []
 
     constructor(opts: MaxBrainBridgeOptions) {
         this.fullUrl = `${opts.wsUrl}/${opts.botId}`
@@ -59,8 +62,34 @@ export class MaxBrainBridge {
         this.connect()
     }
 
+    private cleanupWs(ws: WebSocket | null): void {
+        if (!ws) return
+        // Detach ALL listeners we attached. Critical to prevent
+        // listener-stacking memory leak on repeated reconnects.
+        ws.removeAllListeners('open')
+        ws.removeAllListeners('message')
+        ws.removeAllListeners('close')
+        ws.removeAllListeners('error')
+        try {
+            ws.close()
+        } catch {
+            /* ignore */
+        }
+        this._testDeadSockets.push(ws)
+    }
+
     private connect(): void {
         if (this.stopped) return
+        // CRITICAL: detach any previous WS before opening a new one.
+        // Without this, old close-handler closures (which call
+        // scheduleReconnect→connect) survive and accumulate, and old
+        // message handlers (which push to audioInject) double up. We
+        // observed this leak in Milestone E live testing: bytesReceived
+        // counter exploded from 8 MB → 7 GB over a few minutes.
+        const old = this.ws
+        this.ws = null
+        this.cleanupWs(old)
+
         try {
             this.ws = new WebSocket(this.fullUrl)
         } catch (err) {
@@ -88,6 +117,14 @@ export class MaxBrainBridge {
         this.ws.on('close', (code: number) => {
             this.lastCloseAt = Date.now()
             this.lastCloseCode = code
+            // Immediately detach & record the now-dead socket so that
+            // stale listeners cannot fire again (e.g. during GC / ws
+            // internal cleanup). We do this here rather than waiting
+            // until the next connect() call, so the dead-socket list
+            // is populated before any reconnect timer fires.
+            const closing = this.ws
+            this.ws = null
+            this.cleanupWs(closing)
             if (!this.stopped) {
                 this.scheduleReconnect()
             }
@@ -95,7 +132,6 @@ export class MaxBrainBridge {
 
         this.ws.on('error', (err: Error) => {
             this.lastConnectError = err.message
-            // Errors trigger 'close' afterwards; reconnect logic lives there.
         })
     }
 

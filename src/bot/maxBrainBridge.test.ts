@@ -176,4 +176,52 @@ describe('MaxBrainBridge', () => {
         expect(closeFired).toBe(true)
         await env.close()
     })
+
+    it('detaches listeners from the OLD WebSocket on reconnect', async () => {
+        // Open + close fake server twice; verify bridge does NOT leak
+        // listeners on the dead websockets.
+        const env1 = await spinUpFakeBrain()
+        const stream = new AudioStream({
+            srcSampleRate: 16000,
+            dstSampleRate: 16000,
+        })
+        const inject = {
+            pushInt16Buffer: jest.fn(),
+            stop: jest.fn(),
+        } as unknown as { pushInt16Buffer: jest.Mock; stop: jest.Mock }
+
+        const acceptedSockets: WebSocket[] = []
+        env1.wss.on('connection', (ws) => {
+            acceptedSockets.push(ws)
+        })
+
+        const bridge = new MaxBrainBridge({
+            wsUrl: `ws://localhost:${env1.port}`,
+            botId: 'leak-test',
+            audioStream: stream,
+            audioInject: inject as never,
+        })
+        await new Promise((r) => setTimeout(r, 150))
+
+        // Force-close server side
+        for (const ws of acceptedSockets) ws.close()
+        await new Promise((r) => setTimeout(r, 150))
+
+        // The OLD client-side ws (before reconnect) should have no
+        // listeners left — they should have been removed on close.
+        // Inspect via the bridge's internal record of past sockets.
+        const oldSockets = (bridge as unknown as {
+            _testDeadSockets?: WebSocket[]
+        })._testDeadSockets ?? []
+        expect(oldSockets.length).toBeGreaterThanOrEqual(1)
+        for (const dead of oldSockets) {
+            expect(dead.listenerCount('message')).toBe(0)
+            expect(dead.listenerCount('close')).toBe(0)
+            expect(dead.listenerCount('open')).toBe(0)
+            expect(dead.listenerCount('error')).toBe(0)
+        }
+
+        bridge.stop()
+        await env1.close()
+    })
 })
