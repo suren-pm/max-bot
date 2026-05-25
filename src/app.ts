@@ -142,6 +142,14 @@ export function createServerWithWs(): AppWithServer {
                 "find /tmp /root /var/log -name 'pulse*.log' 2>/dev/null | head -5 || echo NONE",
             ),
             machine_id: tryExec('cat /etc/machine-id 2>&1 || cat /var/lib/dbus/machine-id 2>&1'),
+            // Critical routing diagnostics: who is writing to / reading from
+            // each pulse sink/source. This tells us if Chrome's outgoing mic
+            // is actually consuming virtual_mic.
+            sink_inputs: tryExec('pactl list sink-inputs 2>&1 | head -80 || echo NONE'),
+            source_outputs: tryExec('pactl list source-outputs 2>&1 | head -80 || echo NONE'),
+            default_source: tryExec('pactl get-default-source 2>&1 || echo unknown'),
+            default_sink: tryExec('pactl get-default-sink 2>&1 || echo unknown'),
+            sources_full: tryExec('pactl list sources 2>&1 | head -120 || echo NONE'),
             // Try to start pulseaudio in foreground for 1 second to capture
             // its actual error message.
             try_start_short: tryExec(
