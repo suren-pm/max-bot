@@ -150,6 +150,8 @@ export function createServerWithWs(): AppWithServer {
             default_source: tryExec('pactl get-default-source 2>&1 || echo unknown'),
             default_sink: tryExec('pactl get-default-sink 2>&1 || echo unknown'),
             sources_full: tryExec('pactl list sources 2>&1 | head -120 || echo NONE'),
+            ffmpeg_processes: tryExec('ps -eo pid,etime,args | grep -i ffmpeg | grep -v grep || echo NONE'),
+            chromium_processes: tryExec('ps -eo pid,etime,args | grep -iE "chrom" | grep -v grep | head -5 || echo NONE'),
             // Try to start pulseaudio in foreground for 1 second to capture
             // its actual error message.
             try_start_short: tryExec(
