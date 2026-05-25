@@ -12,6 +12,7 @@
 
 import { ChildProcess, spawn } from 'child_process'
 import { EventEmitter } from 'events'
+import { recordPostmortem } from './postmortem'
 
 export interface AudioInjectOptions {
     sampleRate: number
@@ -89,7 +90,19 @@ export class AudioInject extends EventEmitter {
             }
         })
         this.child.on('error', (err) => this.emit('error', err))
-        this.child.on('exit', (code) => this.emit('exit', code ?? -1))
+        this.child.on('exit', (code, signal) => {
+            // If we initiated stop(), this is expected — don't record.
+            if (!this.stopped) {
+                recordPostmortem({
+                    kind: 'ffmpeg',
+                    pid: this.child?.pid ?? null,
+                    exitCode: code ?? null,
+                    signal: signal ?? null,
+                    stderrTail: this.stderrTail.join('').slice(-2000),
+                })
+            }
+            this.emit('exit', code ?? -1)
+        })
     }
 
     /** Accepts a buffer of little-endian Int16 PCM samples. */
@@ -109,6 +122,15 @@ export class AudioInject extends EventEmitter {
             f32.byteLength,
         )
         stdin.write(out)
+    }
+
+    isAlive(): boolean {
+        return (
+            !this.stopped &&
+            this.child !== null &&
+            !this.child.killed &&
+            this.child.exitCode === null
+        )
     }
 
     stop(): void {

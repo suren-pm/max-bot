@@ -1,10 +1,15 @@
+// Mock postmortem module BEFORE importing audioInject
+jest.mock('./postmortem', () => ({
+    recordPostmortem: jest.fn(),
+}))
+
 // Mock child_process.spawn BEFORE importing audioInject.
 jest.mock('child_process', () => {
     const writeMock = jest.fn()
     const endMock = jest.fn()
     const killMock = jest.fn()
     const onErrorListeners: Array<(e: Error) => void> = []
-    const onExitListeners: Array<(code: number) => void> = []
+    const onExitListeners: Array<(code: number, signal: string | null) => void> = []
     const stdinDestroyedFlag = { destroyed: false }
 
     const fakeChild = {
@@ -20,11 +25,12 @@ jest.mock('child_process', () => {
         },
         on: (ev: string, cb: (...a: unknown[]) => void) => {
             if (ev === 'error') onErrorListeners.push(cb as (e: Error) => void)
-            if (ev === 'exit') onExitListeners.push(cb as (code: number) => void)
+            if (ev === 'exit') onExitListeners.push(cb as (code: number, signal: string | null) => void)
         },
         kill: killMock,
         pid: 12345,
         killed: false,
+        exitCode: null,
     }
 
     const spawnMock = jest.fn(() => fakeChild)
@@ -37,8 +43,8 @@ jest.mock('child_process', () => {
             endMock,
             killMock,
             stdinDestroyedFlag,
-            triggerExit: (code: number) =>
-                onExitListeners.forEach((f) => f(code)),
+            triggerExit: (code: number, signal: string | null = null) =>
+                onExitListeners.forEach((f) => f(code, signal)),
             triggerError: (e: Error) =>
                 onErrorListeners.forEach((f) => f(e)),
         },
@@ -162,5 +168,12 @@ describe('AudioInject', () => {
             done()
         })
         mocks.triggerExit(0)
+    })
+
+    it('isAlive() returns false after stop()', () => {
+        const inject = new AudioInject({ sampleRate: 16000 })
+        expect(inject.isAlive()).toBe(true)
+        inject.stop()
+        expect(inject.isAlive()).toBe(false)
     })
 })
