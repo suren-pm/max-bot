@@ -24,7 +24,9 @@ import {
     hasActiveSession,
     registerSession,
     removeSession,
+    withTimeout,
 } from './bot/sessions'
+import { recordPostmortem } from './bot/postmortem'
 import { attachWebSocketServer } from './bot/wsServer'
 
 const VERSION = '0.1.0'
@@ -328,16 +330,30 @@ export function createServerWithWs(): AppWithServer {
             })
             return
         }
-        try {
-            await session.close()
-        } catch (err) {
-            // Log but still treat as successful — goal is to forget the bot.
-            const message = err instanceof Error ? err.message : String(err)
-            // eslint-disable-next-line no-console
-            console.warn(`close() threw during /leave/${bot_id}: ${message}`)
-        }
+        // Wrap close() in a 15s timeout. If Playwright/Chromium hangs,
+        // we still respond cleanly and let the next /join replace state.
+        const result = await withTimeout(
+            session.close(),
+            15000,
+            `leave/${bot_id}`,
+        )
         removeSession(bot_id)
-        res.status(200).json({ ok: true, bot_id })
+        if (result.timedOut) {
+            recordPostmortem({
+                kind: 'playwright_page',
+                pid: null,
+                exitCode: null,
+                signal: 'LEAVE_TIMEOUT',
+                stderrTail: `/leave/${bot_id} cleanup exceeded 15s — session removed from registry, child processes may be lingering`,
+            })
+            // eslint-disable-next-line no-console
+            console.warn(`/leave/${bot_id}: close() exceeded 15s, forcing`)
+        }
+        res.status(200).json({
+            ok: true,
+            bot_id,
+            forced: result.timedOut,
+        })
     })
 
     // Wrap in an http.Server and attach the WebSocket upgrade handler.

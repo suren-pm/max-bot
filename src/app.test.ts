@@ -148,4 +148,54 @@ describe('max-bot HTTP server', () => {
             expect(res.status).toBe(404)
         })
     })
+
+    describe('POST /leave/:bot_id timeout handling', () => {
+        it('returns 200 with forced=true if session.close() hangs', async () => {
+            const hangingClose = jest.fn(() => new Promise<void>(() => {
+                // Never resolves — simulates hung Playwright cleanup
+            }))
+            jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
+                bot_id: 'hang-bot',
+                page: {} as never,
+                close: hangingClose,
+            })
+
+            const app = createServer()
+            const joinRes = await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            expect(joinRes.status).toBe(200)
+            const bot_id = joinRes.body.bot_id
+
+            // /leave should return within ~16 seconds even though close hangs
+            const start = Date.now()
+            const leaveRes = await request(app).post(`/leave/${bot_id}`)
+            const elapsed = Date.now() - start
+
+            expect(leaveRes.status).toBe(200)
+            expect(leaveRes.body.forced).toBe(true)
+            expect(elapsed).toBeLessThan(17000)
+        }, 20000)
+
+        it('returns 200 with forced=false on clean close', async () => {
+            const cleanClose = jest.fn(async () => {})
+            jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
+                bot_id: 'clean-bot',
+                page: {} as never,
+                close: cleanClose,
+            })
+
+            const app = createServer()
+            const joinRes = await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            const bot_id = joinRes.body.bot_id
+
+            const leaveRes = await request(app).post(`/leave/${bot_id}`)
+            expect(leaveRes.status).toBe(200)
+            expect(leaveRes.body.forced).toBe(false)
+        })
+    })
 })
