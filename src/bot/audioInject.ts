@@ -47,11 +47,8 @@ export class AudioInject extends EventEmitter {
         // plugin is not available. -f pulse uses libpulse directly,
         // which IS installed via pulseaudio-utils.
         const args = [
-            // Bumped to 'info' so /diag/inject's stderr tail shows the
-            // actual pulse-connection state. Milestone E silent-failure
-            // debug. Revert to 'warning' once root-caused.
             '-loglevel',
-            'info',
+            'warning',
             '-f',
             'f32le',
             '-ar',
@@ -60,9 +57,24 @@ export class AudioInject extends EventEmitter {
             '1',
             '-i',
             '-',
+            // CRITICAL: ffmpeg pulse muxer interprets the positional arg
+            // after `-f pulse` as media.name (the application label shown
+            // in pavucontrol), NOT the target sink. Without `-device`,
+            // libpulse silently falls back to the default sink, which is
+            // virtual_speaker (the incoming-audio playback sink). Bytes
+            // then go nowhere useful. Always pin the sink explicitly with
+            // `-device` so audio lands in virtual_mic_input where the
+            // virtual_mic source can pick it up for Chrome's getUserMedia.
+            //
+            // Root-caused 2026-05-25 during milestone E live testing:
+            // /diag/pulse showed ffmpeg's sink-input was on Sink: 1
+            // (virtual_speaker) despite passing 'virtual_mic_input' as
+            // the positional argument.
             '-f',
             'pulse',
+            '-device',
             sink,
+            'MaxBotInject',
         ]
         this.child = spawn('ffmpeg', args, {
             stdio: ['pipe', 'pipe', 'pipe'],
