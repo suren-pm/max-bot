@@ -49,15 +49,20 @@ describe('max-bot HTTP server', () => {
     })
 
     describe('GET /health', () => {
-        it('responds with 200 and a status payload', async () => {
+        it('responds with status payload and 200 or 503 depending on subsystems', async () => {
             const app = createServer()
             const res = await request(app).get('/health')
-            expect(res.status).toBe(200)
+            // 200 if Xvfb + PulseAudio are alive (Linux container with /start.sh).
+            // 503 if either is missing (typical macOS dev environment).
+            // We accept either as long as the shape is right.
+            expect([200, 503]).toContain(res.status)
             expect(res.body).toMatchObject({
-                status: 'ok',
                 service: 'max-bot',
             })
             expect(typeof res.body.version).toBe('string')
+            expect(res.body.checks).toBeDefined()
+            expect(typeof res.body.checks.xvfb).toBe('boolean')
+            expect(typeof res.body.checks.pulse).toBe('boolean')
         })
     })
 

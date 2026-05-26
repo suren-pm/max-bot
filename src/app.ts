@@ -61,10 +61,34 @@ export function createServerWithWs(): AppWithServer {
     app.use(express.json())
 
     app.get('/health', (_req: Request, res: Response) => {
-        res.status(200).json({
-            status: 'ok',
+        const checks = {
+            xvfb: false,
+            pulse: false,
+        }
+        try {
+            execSync('xdpyinfo -display :99', {
+                timeout: 1500,
+                stdio: ['ignore', 'ignore', 'ignore'],
+            })
+            checks.xvfb = true
+        } catch {
+            checks.xvfb = false
+        }
+        try {
+            execSync('pactl info', {
+                timeout: 1500,
+                stdio: ['ignore', 'ignore', 'ignore'],
+            })
+            checks.pulse = true
+        } catch {
+            checks.pulse = false
+        }
+        const healthy = checks.xvfb && checks.pulse
+        res.status(healthy ? 200 : 503).json({
+            status: healthy ? 'ok' : 'degraded',
             service: 'max-bot',
             version: VERSION,
+            checks,
         })
     })
 
