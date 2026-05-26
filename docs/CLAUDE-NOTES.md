@@ -211,3 +211,21 @@ Read `src/meeting/shared/audio-capture.ts` (460 lines) — the upstream pattern 
 
 
 
+
+## Milestone F — In progress 2026-05-26
+
+Hardening layer on top of milestone E. What's new:
+
+- **`/leave` timeout-bounded** — 15s ceiling, returns `{ok, bot_id, forced}`. Postmortem records `LEAVE_TIMEOUT` when forced.
+- **Bridge listener leak fixed** — `cleanupWs()` detaches all event listeners on the old WS before reconnecting. Test: `_testDeadSockets` array, verified zero listener count after reconnect.
+- **Bridge heartbeat watchdog** — `heartbeatStalenessMs` (default 10s). If no message from max-brain in that window, force-reconnect. Counter exposed via `/diag/bridge`.
+- **Page-death detection** — `wirePageDeath()` attaches Playwright `close` + `crash` listeners. `onPageDeath` callback in `joinMeet()` auto-cleans the session and records a postmortem.
+- **ffmpeg-death detection** — `audioInject.child.on('exit')` records a postmortem if ffmpeg dies outside our `stop()` path.
+- **`/health` deep check** — `xdpyinfo` + `pactl info`. Returns 503 if either fails.
+- **Railway healthcheck wired** — `healthcheckPath = "/health"`, `restartPolicyType = "ON_FAILURE"`, max 5 retries.
+- **Postmortem ring buffer** — `/diag/postmortem` exposes last 20 subprocess death events. Read this when a session feels off.
+- **Test-only kill endpoint** — `POST /diag/kill/ffmpeg/:bot_id` for F.21 live acceptance.
+
+42 → 60 tests.
+
+Pending: F.20 (push + PR + merge + deploy), F.21 (live 15-min conversation + induced ffmpeg crash + container restart verification).

@@ -24,7 +24,13 @@ import {
     hasActiveSession,
     registerSession,
     removeSession,
+    withTimeout,
 } from './bot/sessions'
+import {
+    getAllPostmortems,
+    getLatestPostmortem,
+    recordPostmortem,
+} from './bot/postmortem'
 import { attachWebSocketServer } from './bot/wsServer'
 
 const VERSION = '0.1.0'
@@ -55,10 +61,34 @@ export function createServerWithWs(): AppWithServer {
     app.use(express.json())
 
     app.get('/health', (_req: Request, res: Response) => {
-        res.status(200).json({
-            status: 'ok',
+        const checks = {
+            xvfb: false,
+            pulse: false,
+        }
+        try {
+            execSync('xdpyinfo -display :99', {
+                timeout: 1500,
+                stdio: ['ignore', 'ignore', 'ignore'],
+            })
+            checks.xvfb = true
+        } catch {
+            checks.xvfb = false
+        }
+        try {
+            execSync('pactl info', {
+                timeout: 1500,
+                stdio: ['ignore', 'ignore', 'ignore'],
+            })
+            checks.pulse = true
+        } catch {
+            checks.pulse = false
+        }
+        const healthy = checks.xvfb && checks.pulse
+        res.status(healthy ? 200 : 503).json({
+            status: healthy ? 'ok' : 'degraded',
             service: 'max-bot',
             version: VERSION,
+            checks,
         })
     })
 
@@ -196,6 +226,7 @@ export function createServerWithWs(): AppWithServer {
             // the RTCPeerConnection wrapper is in place BEFORE Meet's
             // JavaScript starts running. Without this, our wrap fires
             // too late and the audio tracks bypass our mixer.
+            let resolvedBotId: string | null = null
             const { bot_id, page, close } = await joinMeet({
                 meeting_url,
                 bot_name,
@@ -210,7 +241,29 @@ export function createServerWithWs(): AppWithServer {
                         )
                     }
                 },
+                onPageDeath: (event) => {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                        `[page death] bot=${resolvedBotId ?? '?'} reason=${event.reason}`,
+                    )
+                    recordPostmortem({
+                        kind: 'playwright_page',
+                        pid: null,
+                        exitCode: null,
+                        signal: event.reason,
+                        stderrTail: `Playwright page emitted ${event.reason}`,
+                    })
+                    // Auto-cleanup: trigger session.close() asynchronously.
+                    const dead = resolvedBotId
+                        ? getSession(resolvedBotId)
+                        : undefined
+                    if (dead) {
+                        dead.close().catch(() => {})
+                        removeSession(resolvedBotId!)
+                    }
+                },
             })
+            resolvedBotId = bot_id
             // Open the outbound WebSocket to max-brain. When
             // MAX_BRAIN_WS_URL is unset (local dev), bridge harmlessly
             // attempts ws://localhost:0/${bot_id} and stays disconnected;
@@ -307,6 +360,8 @@ export function createServerWithWs(): AppWithServer {
         res.status(200).json({
             bot_id: req.params.bot_id,
             connected: b.isConnected(),
+            disconnectedSince: b.disconnectedSince,
+            heartbeatReconnects: b.heartbeatReconnects,
             bytesReceivedFromBrain: b.bytesReceivedFromBrain,
             messagesReceivedFromBrain: b.messagesReceivedFromBrain,
             bytesSentToBrain: b.bytesSentToBrain,
@@ -319,6 +374,39 @@ export function createServerWithWs(): AppWithServer {
         })
     })
 
+
+    // Exposes the ring buffer of subprocess-death events. Use this when a
+    // session feels broken — `latest` shows what just died.
+    app.get('/diag/postmortem', (_req: Request, res: Response) => {
+        res.status(200).json({
+            latest: getLatestPostmortem(),
+            all: getAllPostmortems(),
+        })
+    })
+
+    // Debug-only: force-kill the current session's ffmpeg subprocess so
+    // F.21 live test can verify postmortem capture works and Railway
+    // healthcheck restart kicks in. NOT auth-gated (max-bot is single-tenant
+    // behind Railway).
+    app.post('/diag/kill/ffmpeg/:bot_id', (req: Request, res: Response) => {
+        const session = getSession(req.params.bot_id)
+        if (!session) {
+            res.status(404).json({
+                error: `no active session for bot_id=${req.params.bot_id}`,
+            })
+            return
+        }
+        const pid = session.audioInject.child?.pid ?? null
+        try {
+            session.audioInject.child?.kill('SIGKILL')
+        } catch (err) {
+            res.status(500).json({
+                error: err instanceof Error ? err.message : String(err),
+            })
+            return
+        }
+        res.status(200).json({ ok: true, killed_pid: pid })
+    })
     app.post('/leave/:bot_id', async (req: Request, res: Response) => {
         const { bot_id } = req.params
         const session = getSession(bot_id)
@@ -328,16 +416,30 @@ export function createServerWithWs(): AppWithServer {
             })
             return
         }
-        try {
-            await session.close()
-        } catch (err) {
-            // Log but still treat as successful — goal is to forget the bot.
-            const message = err instanceof Error ? err.message : String(err)
-            // eslint-disable-next-line no-console
-            console.warn(`close() threw during /leave/${bot_id}: ${message}`)
-        }
+        // Wrap close() in a 15s timeout. If Playwright/Chromium hangs,
+        // we still respond cleanly and let the next /join replace state.
+        const result = await withTimeout(
+            session.close(),
+            15000,
+            `leave/${bot_id}`,
+        )
         removeSession(bot_id)
-        res.status(200).json({ ok: true, bot_id })
+        if (result.timedOut) {
+            recordPostmortem({
+                kind: 'playwright_page',
+                pid: null,
+                exitCode: null,
+                signal: 'LEAVE_TIMEOUT',
+                stderrTail: `/leave/${bot_id} cleanup exceeded 15s — session removed from registry, child processes may be lingering`,
+            })
+            // eslint-disable-next-line no-console
+            console.warn(`/leave/${bot_id}: close() exceeded 15s, forcing`)
+        }
+        res.status(200).json({
+            ok: true,
+            bot_id,
+            forced: result.timedOut,
+        })
     })
 
     // Wrap in an http.Server and attach the WebSocket upgrade handler.

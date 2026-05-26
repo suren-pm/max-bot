@@ -6,6 +6,7 @@ import {
     JoinSession,
     registerSession,
     removeSession,
+    withTimeout,
 } from './sessions'
 
 function makeAudioStream(): AudioStream {
@@ -57,5 +58,32 @@ describe('bot/sessions', () => {
 
     it('removeSession is a no-op for unknown bot_id', () => {
         expect(() => removeSession('nope')).not.toThrow()
+    })
+})
+
+describe('withTimeout', () => {
+    it('resolves with the inner value when inner resolves before timeout', async () => {
+        const result = await withTimeout(
+            Promise.resolve('ok'),
+            1000,
+            'fast',
+        )
+        expect(result).toEqual({ timedOut: false, value: 'ok', label: 'fast' })
+    })
+
+    it('returns timedOut=true when inner takes longer than ms', async () => {
+        const slow = new Promise((resolve) => setTimeout(resolve, 200))
+        const result = await withTimeout(slow, 50, 'slow')
+        expect(result.timedOut).toBe(true)
+    })
+
+    it('does not throw when inner rejects after timeout', async () => {
+        const failsLate = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('late')), 200),
+        )
+        const result = await withTimeout(failsLate, 50, 'fail-late')
+        expect(result.timedOut).toBe(true)
+        // Awaiting later doesn't propagate — just verifying no unhandled rejection
+        await new Promise((r) => setTimeout(r, 250))
     })
 })

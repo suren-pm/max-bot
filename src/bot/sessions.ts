@@ -53,3 +53,47 @@ export function hasActiveSession(): boolean {
 export function _clearAllSessions(): void {
     sessions.clear()
 }
+
+/**
+ * Wrap a promise with a timeout. Returns `{timedOut: true}` if the
+ * promise didn't settle within `ms` milliseconds — the underlying
+ * promise is left running (caller's responsibility to stop bothering).
+ * Late rejections are swallowed via a no-op .catch so Node doesn't
+ * log unhandledRejection.
+ *
+ * Used by /leave to ensure the HTTP response never blocks past Railway's
+ * gateway timeout, even if Playwright/Chromium cleanup hangs.
+ */
+export interface WithTimeoutResult<T> {
+    timedOut: boolean
+    value?: T
+    label: string
+}
+
+export async function withTimeout<T>(
+    p: Promise<T>,
+    ms: number,
+    label: string,
+): Promise<WithTimeoutResult<T>> {
+    let timer: NodeJS.Timeout | undefined
+    const timeoutPromise = new Promise<WithTimeoutResult<T>>((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true, label }), ms)
+    })
+    const innerPromise = p
+        .then<WithTimeoutResult<T>>((value) => ({
+            timedOut: false,
+            value,
+            label,
+        }))
+        .catch<WithTimeoutResult<T>>(() => ({
+            // If inner throws, treat as "completed" (not a timeout) so
+            // caller doesn't try to force-kill twice.
+            timedOut: false,
+            label,
+        }))
+    // Swallow late rejections so they don't become unhandledRejection.
+    p.catch(() => {})
+    const result = await Promise.race([innerPromise, timeoutPromise])
+    if (timer) clearTimeout(timer)
+    return result
+}

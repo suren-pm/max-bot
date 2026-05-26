@@ -19,6 +19,17 @@ jest.mock('./bot/maxBrainBridge', () => {
         MaxBrainBridge: jest.fn().mockImplementation(() => ({
             stop: jest.fn(),
             isConnected: jest.fn(() => false),
+            disconnectedSince: null,
+            heartbeatReconnects: 0,
+            bytesReceivedFromBrain: 0,
+            messagesReceivedFromBrain: 0,
+            bytesSentToBrain: 0,
+            chunksSentToBrain: 0,
+            lastOpenAt: null,
+            lastCloseAt: null,
+            lastCloseCode: null,
+            lastMessageAt: null,
+            lastConnectError: null,
         })),
     }
 })
@@ -28,23 +39,30 @@ import request from 'supertest'
 import { createServer } from './app'
 import * as joinMeetModule from './bot/joinMeet'
 import { _clearAllSessions } from './bot/sessions'
+import { _clearPostmortems } from './bot/postmortem'
 
 describe('max-bot HTTP server', () => {
     afterEach(() => {
         jest.restoreAllMocks()
         _clearAllSessions()
+        _clearPostmortems()
     })
 
     describe('GET /health', () => {
-        it('responds with 200 and a status payload', async () => {
+        it('responds with status payload and 200 or 503 depending on subsystems', async () => {
             const app = createServer()
             const res = await request(app).get('/health')
-            expect(res.status).toBe(200)
+            // 200 if Xvfb + PulseAudio are alive (Linux container with /start.sh).
+            // 503 if either is missing (typical macOS dev environment).
+            // We accept either as long as the shape is right.
+            expect([200, 503]).toContain(res.status)
             expect(res.body).toMatchObject({
-                status: 'ok',
                 service: 'max-bot',
             })
             expect(typeof res.body.version).toBe('string')
+            expect(res.body.checks).toBeDefined()
+            expect(typeof res.body.checks.xvfb).toBe('boolean')
+            expect(typeof res.body.checks.pulse).toBe('boolean')
         })
     })
 
@@ -119,6 +137,22 @@ describe('max-bot HTTP server', () => {
             expect(res.status).toBe(500)
             expect(res.body.error).toMatch(/boom/)
         })
+
+        it('passes onPageDeath callback through to joinMeet', async () => {
+            const joinSpy = jest.spyOn(joinMeetModule, 'joinMeet')
+                .mockResolvedValue({
+                    bot_id: 'pd-bot',
+                    page: {} as never,
+                    close: jest.fn(async () => {}),
+                })
+            const app = createServer()
+            await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            const callArg = joinSpy.mock.calls[0][0]
+            expect(typeof callArg.onPageDeath).toBe('function')
+        })
     })
 
     describe('POST /leave/:bot_id', () => {
@@ -146,6 +180,66 @@ describe('max-bot HTTP server', () => {
             const app = createServer()
             const res = await request(app).post('/leave/does-not-exist')
             expect(res.status).toBe(404)
+        })
+    })
+
+    describe('POST /leave/:bot_id timeout handling', () => {
+        it('returns 200 with forced=true if session.close() hangs', async () => {
+            const hangingClose = jest.fn(() => new Promise<void>(() => {
+                // Never resolves — simulates hung Playwright cleanup
+            }))
+            jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
+                bot_id: 'hang-bot',
+                page: {} as never,
+                close: hangingClose,
+            })
+
+            const app = createServer()
+            const joinRes = await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            expect(joinRes.status).toBe(200)
+            const bot_id = joinRes.body.bot_id
+
+            // /leave should return within ~16 seconds even though close hangs
+            const start = Date.now()
+            const leaveRes = await request(app).post(`/leave/${bot_id}`)
+            const elapsed = Date.now() - start
+
+            expect(leaveRes.status).toBe(200)
+            expect(leaveRes.body.forced).toBe(true)
+            expect(elapsed).toBeLessThan(17000)
+        }, 20000)
+
+        it('returns 200 with forced=false on clean close', async () => {
+            const cleanClose = jest.fn(async () => {})
+            jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
+                bot_id: 'clean-bot',
+                page: {} as never,
+                close: cleanClose,
+            })
+
+            const app = createServer()
+            const joinRes = await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            const bot_id = joinRes.body.bot_id
+
+            const leaveRes = await request(app).post(`/leave/${bot_id}`)
+            expect(leaveRes.status).toBe(200)
+            expect(leaveRes.body.forced).toBe(false)
+        })
+    })
+
+    describe('GET /diag/postmortem', () => {
+        it('returns empty when nothing has died', async () => {
+            const app = createServer()
+            const res = await request(app).get('/diag/postmortem')
+            expect(res.status).toBe(200)
+            expect(res.body.latest).toBeNull()
+            expect(Array.isArray(res.body.all)).toBe(true)
         })
     })
 })
