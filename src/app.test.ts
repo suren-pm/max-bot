@@ -39,11 +39,13 @@ import request from 'supertest'
 import { createServer } from './app'
 import * as joinMeetModule from './bot/joinMeet'
 import { _clearAllSessions } from './bot/sessions'
+import { _clearPostmortems } from './bot/postmortem'
 
 describe('max-bot HTTP server', () => {
     afterEach(() => {
         jest.restoreAllMocks()
         _clearAllSessions()
+        _clearPostmortems()
     })
 
     describe('GET /health', () => {
@@ -223,6 +225,16 @@ describe('max-bot HTTP server', () => {
             const leaveRes = await request(app).post(`/leave/${bot_id}`)
             expect(leaveRes.status).toBe(200)
             expect(leaveRes.body.forced).toBe(false)
+        })
+    })
+
+    describe('GET /diag/postmortem', () => {
+        it('returns empty when nothing has died', async () => {
+            const app = createServer()
+            const res = await request(app).get('/diag/postmortem')
+            expect(res.status).toBe(200)
+            expect(res.body.latest).toBeNull()
+            expect(Array.isArray(res.body.all)).toBe(true)
         })
     })
 })

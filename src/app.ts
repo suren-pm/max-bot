@@ -26,7 +26,11 @@ import {
     removeSession,
     withTimeout,
 } from './bot/sessions'
-import { recordPostmortem } from './bot/postmortem'
+import {
+    getAllPostmortems,
+    getLatestPostmortem,
+    recordPostmortem,
+} from './bot/postmortem'
 import { attachWebSocketServer } from './bot/wsServer'
 
 const VERSION = '0.1.0'
@@ -346,6 +350,39 @@ export function createServerWithWs(): AppWithServer {
         })
     })
 
+
+    // Exposes the ring buffer of subprocess-death events. Use this when a
+    // session feels broken — `latest` shows what just died.
+    app.get('/diag/postmortem', (_req: Request, res: Response) => {
+        res.status(200).json({
+            latest: getLatestPostmortem(),
+            all: getAllPostmortems(),
+        })
+    })
+
+    // Debug-only: force-kill the current session's ffmpeg subprocess so
+    // F.21 live test can verify postmortem capture works and Railway
+    // healthcheck restart kicks in. NOT auth-gated (max-bot is single-tenant
+    // behind Railway).
+    app.post('/diag/kill/ffmpeg/:bot_id', (req: Request, res: Response) => {
+        const session = getSession(req.params.bot_id)
+        if (!session) {
+            res.status(404).json({
+                error: `no active session for bot_id=${req.params.bot_id}`,
+            })
+            return
+        }
+        const pid = session.audioInject.child?.pid ?? null
+        try {
+            session.audioInject.child?.kill('SIGKILL')
+        } catch (err) {
+            res.status(500).json({
+                error: err instanceof Error ? err.message : String(err),
+            })
+            return
+        }
+        res.status(200).json({ ok: true, killed_pid: pid })
+    })
     app.post('/leave/:bot_id', async (req: Request, res: Response) => {
         const { bot_id } = req.params
         const session = getSession(bot_id)
