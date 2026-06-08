@@ -190,6 +190,11 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
             'AppleWebKit/537.36 (KHTML, like Gecko) ' +
             'Chrome/131.0.0.0 Safari/537.36',
+        // Force Accept-Language to en-US so it stays consistent with the
+        // UA. Without this, Playwright inherits the container's system
+        // locale (Dutch in our Railway egress region) which contradicts
+        // the en-US UA — a fingerprint mismatch tell.
+        locale: 'en-US',
     })
     // Grant mic + camera so Meet's pre-join screen doesn't prompt.
     await context.grantPermissions(['camera', 'microphone'], {
@@ -198,9 +203,16 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
 
     // Override navigator.webdriver to undefined BEFORE any site JS runs.
     // This is the JS-level bot tell that Meet checks once the page loads.
+    // Also override navigator.platform to match the macOS UA we sent —
+    // otherwise Linux container leaks through and Meet detects the
+    // platform vs UA mismatch, redirecting us to the marketing page
+    // a few seconds AFTER initial page load.
     await context.addInitScript(() => {
         Object.defineProperty(navigator, 'webdriver', {
             get: () => undefined,
+        })
+        Object.defineProperty(navigator, 'platform', {
+            get: () => 'MacIntel',
         })
     })
 
