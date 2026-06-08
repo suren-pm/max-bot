@@ -133,7 +133,21 @@ async function fillBotName(page: Page, bot_name: string): Promise<void> {
             // Try the next selector.
         }
     }
-    throw new Error('Could not find the bot-name input on Google Meet')
+    // Capture page state to know whether stealth bypassed the redirect
+    // (page should be meet.google.com/<room>) or whether anti-bot is
+    // still kicking in (page would be workspace.google.com).
+    let currentUrl = 'unknown'
+    let currentTitle = 'unknown'
+    try {
+        currentUrl = page.url()
+        currentTitle = await page.title()
+    } catch {
+        /* ignore */
+    }
+    throw new Error(
+        `Could not find the bot-name input on Google Meet. ` +
+            `Bot landed on URL=${currentUrl} title="${currentTitle}"`,
+    )
 }
 
 async function clickJoinCta(page: Page): Promise<void> {
