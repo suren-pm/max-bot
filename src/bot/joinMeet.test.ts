@@ -1,5 +1,6 @@
-// Mock playwright so the unit tests don't try to launch real Chromium.
-jest.mock('playwright', () => {
+// Mock playwright-extra (which our joinMeet.ts uses via require) so unit
+// tests don't try to launch real Chromium.
+jest.mock('playwright-extra', () => {
     const fillMock = jest.fn(async () => {})
     const clickMock = jest.fn(async () => {})
     const waitForMock = jest.fn(async () => {})
@@ -11,30 +12,39 @@ jest.mock('playwright', () => {
         click: clickMock,
     }))
     const locatorMock = jest.fn(() => ({ first: locatorFirstMock }))
+    const evalMock = jest.fn(async () => '')
+    const $$evalMock = jest.fn(async () => [])
+    const evaluateMock = jest.fn(async () => '')
+    const titleMock = jest.fn(async () => 'Meet')
+    const urlMock = jest.fn(() => 'https://meet.google.com/abc-defg-hij')
+    const setBypassCSPMock = jest.fn(async () => {})
     const newPageMock = jest.fn(async () => ({
         goto: gotoMock,
         locator: locatorMock,
         close: closePageMock,
+        $$eval: $$evalMock,
+        evaluate: evaluateMock,
+        title: titleMock,
+        url: urlMock,
+        setBypassCSP: setBypassCSPMock,
     }))
     const grantPermissionsMock = jest.fn(async () => {})
     const addInitScriptMock = jest.fn(async () => {})
     const closeContextMock = jest.fn(async () => {})
-    const newContextMock = jest.fn(async () => ({
+    const launchPersistentContextMock = jest.fn(async () => ({
         newPage: newPageMock,
         grantPermissions: grantPermissionsMock,
         addInitScript: addInitScriptMock,
         close: closeContextMock,
     }))
-    const closeBrowserMock = jest.fn(async () => {})
-    const launchMock = jest.fn(async () => ({
-        newContext: newContextMock,
-        close: closeBrowserMock,
-    }))
+    const useMock = jest.fn(() => {})
     return {
-        chromium: { launch: launchMock },
+        chromium: {
+            launchPersistentContext: launchPersistentContextMock,
+            use: useMock,
+        },
         __mocks__: {
-            launchMock,
-            newContextMock,
+            launchPersistentContextMock,
             newPageMock,
             gotoMock,
             locatorMock,
@@ -44,18 +54,32 @@ jest.mock('playwright', () => {
             clickMock,
             closePageMock,
             closeContextMock,
-            closeBrowserMock,
             grantPermissionsMock,
+            useMock,
         },
     }
 })
 
-import * as playwright from 'playwright'
+// Stealth plugin is required separately; provide a no-op stub.
+jest.mock('puppeteer-extra-plugin-stealth', () => {
+    return jest.fn(() => ({
+        enabledEvasions: {
+            delete: jest.fn(),
+        },
+    }))
+})
 
+// playwright (the raw types) is still imported for BrowserContext / Page
+// type definitions only; mock it as empty objects so import doesn't fail.
+jest.mock('playwright', () => ({}))
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const playwrightExtra = require('playwright-extra')
 import { joinMeet, JoinResult } from './joinMeet'
 
-const mocks = (playwright as unknown as { __mocks__: Record<string, jest.Mock> })
-    .__mocks__
+const mocks = (
+    playwrightExtra as unknown as { __mocks__: Record<string, jest.Mock> }
+).__mocks__
 
 describe('joinMeet', () => {
     beforeEach(() => {
@@ -70,14 +94,12 @@ describe('joinMeet', () => {
 
         expect(result.bot_id).toMatch(/^[0-9a-f-]{36}$/)
         expect(result.page).toBeDefined()
-        expect(mocks.launchMock).toHaveBeenCalled()
+        expect(mocks.launchPersistentContextMock).toHaveBeenCalled()
         expect(mocks.gotoMock).toHaveBeenCalledWith(
             'https://meet.google.com/abc-defg-hij',
             expect.objectContaining({ waitUntil: expect.any(String) }),
         )
-        // Bot name typed.
         expect(mocks.fillMock).toHaveBeenCalledWith('Max')
-        // Join CTA clicked.
         expect(mocks.clickMock).toHaveBeenCalled()
     })
 
@@ -89,7 +111,6 @@ describe('joinMeet', () => {
         await result.close()
         expect(mocks.closePageMock).toHaveBeenCalled()
         expect(mocks.closeContextMock).toHaveBeenCalled()
-        expect(mocks.closeBrowserMock).toHaveBeenCalled()
     })
 
     it('throws if meeting_url is not a Google Meet URL', async () => {

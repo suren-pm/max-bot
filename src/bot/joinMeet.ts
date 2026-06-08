@@ -14,9 +14,7 @@
 
 import * as crypto from 'crypto'
 import {
-    Browser,
     BrowserContext,
-    LaunchOptions,
     Page,
 } from 'playwright'
 // Use playwright-extra so we can plug in the stealth plugin. The plugin
@@ -215,65 +213,81 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
 
     const bot_id = randomUUID()
 
-    // Headful Chrome: Xvfb provides the display inside the container.
-    // Explicitly pass DISPLAY through Playwright's env option in case
-    // chromium.launch doesn't inherit it from the parent process.
-    //
-    // 2026-06-08: Diagnostic proved Google redirects Playwright-launched
-    // Chromium to workspace.google.com marketing page; incognito Chrome
-    // on the same URL reaches the pre-join screen. The 3 stealth-targeted
-    // additions below are the minimum required to bypass the redirect:
-    //   1) ignoreDefaultArgs strips --enable-automation
-    //   2) realistic macOS Chrome user-agent in newContext
-    //   3) addInitScript overrides navigator.webdriver to undefined
-    const launchOpts: LaunchOptions = {
+    // Mirror the upstream meet-teams-bot/src/browser/browser.ts production
+    // launch config — that codebase joins Google Meet successfully in
+    // Docker today. Critical bits we lacked:
+    //   1) launchPersistentContext (not launch + newContext) — persistent
+    //      user-data-dir = state accumulates = looks like a real user
+    //   2) bypassCSP at the context level
+    //   3) full WebRTC + audio + certificate launch args
+    //   4) permissions granted at launch (not after)
+    //   5) ignoreHTTPSErrors + acceptDownloads
+    const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome'
+    const context = (await (chromium as unknown as {
+        launchPersistentContext: (
+            userDataDir: string,
+            opts: Record<string, unknown>,
+        ) => Promise<BrowserContext>
+    }).launchPersistentContext('', {
         headless: false,
-        // Strip Playwright's default --enable-automation flag, which is
-        // a known bot tell.
+        viewport: { width: 1280, height: 720 },
+        executablePath: chromePath,
+        locale: 'en-US',
+        userAgent:
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
+            'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+            'Chrome/131.0.0.0 Safari/537.36',
+        permissions: ['microphone', 'camera'],
+        ignoreHTTPSErrors: true,
+        acceptDownloads: true,
+        bypassCSP: true,
+        timeout: 120000,
         ignoreDefaultArgs: ['--enable-automation'],
         args: [
+            '--window-size=1280,860',
+            '--window-position=0,0',
             '--no-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--use-fake-ui-for-media-stream',
-            // Critical for audio capture: without this, AudioContext is
-            // created in 'suspended' state and stays there forever
-            // because there's no real user gesture inside Playwright.
-            // Web Audio graph won't push frames through the mixer if
-            // the context is suspended.
+            '--disable-setuid-sandbox',
+            '--lang=en-US',
+            '--accept-lang=en-US,en',
+            // PulseAudio / audio
+            '--use-pulseaudio',
+            '--enable-audio-service-sandbox=false',
+            '--audio-buffer-size=2048',
+            '--disable-features=AudioServiceSandbox',
             '--autoplay-policy=no-user-gesture-required',
+            // WebRTC optimizations — Meet checks WebRTC capabilities heavily
+            '--disable-rtc-smoothness-algorithm',
+            '--disable-webrtc-hw-decoding',
+            '--disable-webrtc-hw-encoding',
+            '--enable-webrtc-capture-audio',
+            '--force-webrtc-ip-handling-policy=default',
+            // Anti-bot tells
+            '--disable-blink-features=AutomationControlled',
+            '--disable-background-timer-throttling',
+            '--enable-features=SharedArrayBuffer',
+            // Certs
+            '--ignore-certificate-errors',
+            '--allow-insecure-localhost',
+            '--disable-blink-features=TrustedDOMTypes',
+            '--disable-features=TrustedScriptTypes',
+            '--disable-features=TrustedHTML',
+            // Resource mgmt
+            '--memory-pressure-off',
+            '--disable-background-networking',
+            '--disable-features=TranslateUI',
+            '--disable-features=AutofillServerCommunication',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-default-apps',
+            '--disable-features=MediaRouter',
         ],
         env: {
             ...process.env,
             DISPLAY: process.env.DISPLAY ?? ':99',
         } as NodeJS.ProcessEnv,
-    }
-    const browser: Browser = await chromium.launch(launchOpts)
+    })) as BrowserContext
 
-    const context: BrowserContext = await browser.newContext({
-        // Real macOS Chrome user-agent so Google's edge doesn't redirect
-        // us as a likely-bot user-agent. Matches the version pattern of
-        // an up-to-date Chrome on macOS.
-        userAgent:
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
-            'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-            'Chrome/131.0.0.0 Safari/537.36',
-        // Force Accept-Language to en-US so it stays consistent with the
-        // UA. Without this, Playwright inherits the container's system
-        // locale (Dutch in our Railway egress region) which contradicts
-        // the en-US UA — a fingerprint mismatch tell.
-        locale: 'en-US',
-    })
-    // Grant mic + camera so Meet's pre-join screen doesn't prompt.
-    await context.grantPermissions(['camera', 'microphone'], {
-        origin: 'https://meet.google.com',
-    })
-
-    // Override navigator.webdriver to undefined BEFORE any site JS runs.
-    // This is the JS-level bot tell that Meet checks once the page loads.
-    // Also override navigator.platform to match the macOS UA we sent —
-    // otherwise Linux container leaks through and Meet detects the
-    // platform vs UA mismatch, redirecting us to the marketing page
-    // a few seconds AFTER initial page load.
+    // Override navigator.webdriver + platform BEFORE any site JS runs.
     await context.addInitScript(() => {
         Object.defineProperty(navigator, 'webdriver', {
             get: () => undefined,
@@ -284,11 +298,6 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     })
 
     const page = await context.newPage()
-
-    // setBypassCSP(true) — community-reported tweak from puppeteer-extra
-    // issue #334 that helps Meet's pre-join progress past the
-    // "You can't join this video call" error in Docker.
-    await page.setBypassCSP(true)
 
     if (params.onPageDeath) {
         wirePageDeath(page, params.onPageDeath)
@@ -344,12 +353,9 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
             /* ignore */
         }
         try {
+            // launchPersistentContext returns a BrowserContext whose
+            // close() also tears down the underlying browser.
             await context.close()
-        } catch {
-            /* ignore */
-        }
-        try {
-            await browser.close()
         } catch {
             /* ignore */
         }
