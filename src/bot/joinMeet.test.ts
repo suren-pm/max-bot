@@ -17,10 +17,12 @@ jest.mock('playwright', () => {
         close: closePageMock,
     }))
     const grantPermissionsMock = jest.fn(async () => {})
+    const addInitScriptMock = jest.fn(async () => {})
     const closeContextMock = jest.fn(async () => {})
     const newContextMock = jest.fn(async () => ({
         newPage: newPageMock,
         grantPermissions: grantPermissionsMock,
+        addInitScript: addInitScriptMock,
         close: closeContextMock,
     }))
     const closeBrowserMock = jest.fn(async () => {})
