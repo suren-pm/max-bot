@@ -311,6 +311,34 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
         await params.onPageReady(page)
     }
 
+    // Browser warm-up: visit google.com first to accumulate "real user"
+    // cookies (NID, etc.) BEFORE hitting meet.google.com. The memory file
+    // project_max_bot_milestone_f_shipped notes that the May 25 working
+    // session had "lucky cookie state" / "real user signals" that fresh
+    // containers lack. Real humans don't launch a browser and instantly
+    // type meet.google.com/<room> — they've been on Google all day.
+    // This recreates that signal without OAuth or IP migration.
+    try {
+        await page.goto('https://www.google.com/', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+        })
+        await page.waitForTimeout(2500)
+        await page.mouse.move(400, 300)
+        await page.waitForTimeout(300)
+        await page.mouse.move(620, 420)
+        await page.evaluate(() => {
+            window.scrollBy({ top: 200, behavior: 'smooth' })
+        })
+        await page.waitForTimeout(1500)
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            '[joinMeet] warm-up navigation failed (continuing):',
+            err instanceof Error ? err.message : String(err),
+        )
+    }
+
     // domcontentloaded (not 'networkidle') because Meet's WebRTC keeps
     // the network busy indefinitely — networkidle never fires, and the
     // 30s timeout makes fillBotName run too late, by which time Meet has
