@@ -151,41 +151,23 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     // Headful Chrome: Xvfb provides the display inside the container.
     // Explicitly pass DISPLAY through Playwright's env option in case
     // chromium.launch doesn't inherit it from the parent process.
-    // Stealth args + ignoreDefaultArgs to strip Playwright's automation
-    // tells (most importantly `--enable-automation`, which Google's
-    // anti-bot detection flags). Mirrors upstream meet-teams-bot's
-    // browser.ts launch config — that codebase is known to successfully
-    // join Meet rooms in production.
     //
-    // Diagnosed 2026-05-26 via /diag/page: anonymous Playwright
-    // Chromium was being redirected from meet.google.com/<room> to
-    // workspace.google.com/products/meet/ marketing page. Removing
-    // --enable-automation + adding the stealth flags below should
-    // restore the pre-join screen.
+    // Reverted 2026-06-08 back to May-25 working configuration to A/B
+    // test whether the May-26 redirect-to-marketing-page failure was
+    // caused by my stealth flag changes or by an external (Google /
+    // Railway IP / room state) change.
     const launchOpts: LaunchOptions = {
         headless: false,
-        // CRITICAL: strip Playwright's default --enable-automation flag
-        // and the `webdriver` enable-automation switch. Without this,
-        // navigator.webdriver === true and Google redirects us.
-        ignoreDefaultArgs: ['--enable-automation'],
         args: [
             '--no-sandbox',
-            '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
             '--use-fake-ui-for-media-stream',
+            // Critical for audio capture: without this, AudioContext is
+            // created in 'suspended' state and stays there forever
+            // because there's no real user gesture inside Playwright.
+            // Web Audio graph won't push frames through the mixer if
+            // the context is suspended.
             '--autoplay-policy=no-user-gesture-required',
-            // Locale + accept-language tells: match a real user.
-            '--lang=en-US',
-            '--accept-lang=en-US,en',
-            // Audio routing to PulseAudio — needed even though our
-            // capture is via the WebRTC track wrapper; without it,
-            // Chrome's microphone selection may default to nothing
-            // and Meet treats us as a "no mic" guest.
-            '--use-pulseaudio',
-            '--enable-audio-service-sandbox=false',
-            // Window size to look like a real desktop browser.
-            '--window-size=1280,720',
-            '--window-position=0,0',
         ],
         env: {
             ...process.env,
@@ -194,34 +176,10 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     }
     const browser: Browser = await chromium.launch(launchOpts)
 
-    const context: BrowserContext = await browser.newContext({
-        // Look like a real Chrome on macOS — closer to the user's
-        // actual browser than Playwright's default UA.
-        userAgent:
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
-            '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        locale: 'en-US',
-        viewport: { width: 1280, height: 720 },
-    })
+    const context: BrowserContext = await browser.newContext()
     // Grant mic + camera so Meet's pre-join screen doesn't prompt.
     await context.grantPermissions(['camera', 'microphone'], {
         origin: 'https://meet.google.com',
-    })
-
-    // Strip navigator.webdriver and related anti-bot tells from EVERY
-    // page in this context. Runs before any site JS executes.
-    await context.addInitScript(() => {
-        // Override navigator.webdriver to undefined (most common check).
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined,
-        })
-        // Provide realistic plugins (empty arrays are a tell).
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-        })
-        Object.defineProperty(navigator, 'languages', {
-            get: () => ['en-US', 'en'],
-        })
     })
 
     const page = await context.newPage()
@@ -238,11 +196,8 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
         await params.onPageReady(page)
     }
 
-    // domcontentloaded (not 'networkidle') because Meet's WebRTC + analytics
-    // keep the network active indefinitely; networkidle never fires once we
-    // bypass anti-bot and reach the real Meet page.
     await page.goto(params.meeting_url, {
-        waitUntil: 'domcontentloaded',
+        waitUntil: 'networkidle',
         timeout: 30000,
     })
 
