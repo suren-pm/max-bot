@@ -445,6 +445,22 @@ export function createServerWithWs(): AppWithServer {
         res.status(200).json({ count: out.length, sessions: out })
     })
 
+    app.get('/diag/egress', async (_req: Request, res: Response) => {
+        // What IP does Meet see when our bot connects from this container?
+        // Some Railway IPs may be in Google's bot-flagged range.
+        try {
+            const r = await fetch('https://ipinfo.io/json', {
+                signal: AbortSignal.timeout(8000),
+            })
+            const data = (await r.json()) as Record<string, unknown>
+            res.status(200).json({ ipinfo: data })
+        } catch (err) {
+            res.status(500).json({
+                error: err instanceof Error ? err.message : String(err),
+            })
+        }
+    })
+
     app.get('/diag/postmortem', (_req: Request, res: Response) => {
         res.status(200).json({
             latest: getLatestPostmortem(),
