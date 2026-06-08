@@ -287,8 +287,12 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
         await params.onPageReady(page)
     }
 
+    // domcontentloaded (not 'networkidle') because Meet's WebRTC keeps
+    // the network busy indefinitely — networkidle never fires, and the
+    // 30s timeout makes fillBotName run too late, by which time Meet has
+    // already kicked us to the "you can't join" error page.
     await page.goto(params.meeting_url, {
-        waitUntil: 'networkidle',
+        waitUntil: 'domcontentloaded',
         timeout: 30000,
     })
 
