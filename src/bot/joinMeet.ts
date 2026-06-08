@@ -296,8 +296,27 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
         timeout: 30000,
     })
 
-    await fillBotName(page, params.bot_name)
-    await clickJoinCta(page)
+    // Best-effort: log + continue if name input or join CTA aren't found.
+    // We keep the session alive so /diag/page can inspect what Meet
+    // actually displayed.
+    try {
+        await fillBotName(page, params.bot_name)
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            '[joinMeet] fillBotName best-effort failed:',
+            err instanceof Error ? err.message : String(err),
+        )
+    }
+    try {
+        await clickJoinCta(page)
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            '[joinMeet] clickJoinCta best-effort failed:',
+            err instanceof Error ? err.message : String(err),
+        )
+    }
 
     // At this point the bot has clicked "Ask to join" and will sit in
     // the waiting room until someone admits it. Milestone B's acceptance
