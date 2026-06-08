@@ -138,15 +138,46 @@ async function fillBotName(page: Page, bot_name: string): Promise<void> {
     // still kicking in (page would be workspace.google.com).
     let currentUrl = 'unknown'
     let currentTitle = 'unknown'
+    let allInputs: string[] = []
+    let visibleButtons: string[] = []
     try {
         currentUrl = page.url()
         currentTitle = await page.title()
+        // Dump every <input> on the page so we can see what selectors
+        // Meet is actually rendering.
+        allInputs = await page.$$eval('input', (els) =>
+            els.map((el) => {
+                const e = el as HTMLInputElement
+                return JSON.stringify({
+                    type: e.type,
+                    name: e.name,
+                    id: e.id,
+                    placeholder: e.placeholder,
+                    aria_label: e.getAttribute('aria-label'),
+                    jsname: e.getAttribute('jsname'),
+                    visible: !!(e.offsetWidth || e.offsetHeight),
+                })
+            }),
+        )
+        visibleButtons = await page.$$eval('button, [role=button]', (els) =>
+            els
+                .map((el) =>
+                    (
+                        (el as HTMLElement).innerText ||
+                        el.getAttribute('aria-label') ||
+                        ''
+                    ).trim(),
+                )
+                .filter((t) => t.length > 0 && t.length < 60),
+        )
     } catch {
         /* ignore */
     }
     throw new Error(
         `Could not find the bot-name input on Google Meet. ` +
-            `Bot landed on URL=${currentUrl} title="${currentTitle}"`,
+            `URL=${currentUrl} title="${currentTitle}" ` +
+            `inputs=${JSON.stringify(allInputs)} ` +
+            `buttons=${JSON.stringify(visibleButtons.slice(0, 20))}`,
     )
 }
 
