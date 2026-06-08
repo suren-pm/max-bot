@@ -20,6 +20,7 @@ import { AudioStream } from './bot/audioStream'
 import { joinMeet } from './bot/joinMeet'
 import { MaxBrainBridge } from './bot/maxBrainBridge'
 import {
+    getAllSessions,
     getSession,
     hasActiveSession,
     registerSession,
@@ -417,6 +418,33 @@ export function createServerWithWs(): AppWithServer {
 
     // Exposes the ring buffer of subprocess-death events. Use this when a
     // session feels broken — `latest` shows what just died.
+    app.get('/diag/sessions', async (_req: Request, res: Response) => {
+        const sessions = getAllSessions()
+        const out = await Promise.all(
+            sessions.map(async (s) => {
+                let pageUrl: string | null = null
+                let pageTitle: string | null = null
+                let pageError: string | null = null
+                try {
+                    pageUrl = s.page.url()
+                    pageTitle = await s.page.title()
+                } catch (err) {
+                    pageError = err instanceof Error ? err.message : String(err)
+                }
+                return {
+                    bot_id: s.bot_id,
+                    meeting_url: s.meeting_url,
+                    bot_name: s.bot_name,
+                    startedAt: s.startedAt.toISOString(),
+                    page_url: pageUrl,
+                    page_title: pageTitle,
+                    page_error: pageError,
+                }
+            }),
+        )
+        res.status(200).json({ count: out.length, sessions: out })
+    })
+
     app.get('/diag/postmortem', (_req: Request, res: Response) => {
         res.status(200).json({
             latest: getLatestPostmortem(),

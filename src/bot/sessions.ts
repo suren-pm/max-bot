@@ -49,6 +49,11 @@ export function hasActiveSession(): boolean {
     return sessions.size > 0
 }
 
+/** Diagnostic helper: list every registered session. */
+export function getAllSessions(): JoinSession[] {
+    return Array.from(sessions.values())
+}
+
 /** Test-only escape hatch — clears all sessions. */
 export function _clearAllSessions(): void {
     sessions.clear()
