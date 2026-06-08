@@ -238,8 +238,11 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
         await params.onPageReady(page)
     }
 
+    // domcontentloaded (not 'networkidle') because Meet's WebRTC + analytics
+    // keep the network active indefinitely; networkidle never fires once we
+    // bypass anti-bot and reach the real Meet page.
     await page.goto(params.meeting_url, {
-        waitUntil: 'networkidle',
+        waitUntil: 'domcontentloaded',
         timeout: 30000,
     })
 
