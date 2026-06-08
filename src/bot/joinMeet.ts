@@ -16,10 +16,23 @@ import * as crypto from 'crypto'
 import {
     Browser,
     BrowserContext,
-    chromium,
     LaunchOptions,
     Page,
 } from 'playwright'
+// Use playwright-extra so we can plug in the stealth plugin. The plugin
+// overrides ~20 detection signals (WebGL renderer, AudioContext, Sec-CH-UA
+// hints, hardwareConcurrency, deviceMemory, plugins, languages,
+// navigator.permissions, navigator.webdriver, etc.) in one shot.
+// playwright-extra's `chromium` is a drop-in replacement for playwright's.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { chromium } = require('playwright-extra') as {
+    chromium: typeof import('playwright').chromium
+}
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const StealthPlugin = require('puppeteer-extra-plugin-stealth')
+;(chromium as unknown as { use: (plugin: unknown) => void }).use(
+    StealthPlugin(),
+)
 
 // node 16+ has crypto.randomUUID(), but upstream's @types/node is pinned
 // at 14.x, so we cast around the missing type declaration.
