@@ -324,6 +324,46 @@ export function createServerWithWs(): AppWithServer {
         }
     })
 
+    // Surfaces what page the bot's Chromium is actually on. Critical
+    // for debugging joinMeet regressions (bot stuck on pre-join, sign-in,
+    // captcha, etc.). Returns URL, title, and a snippet of body text.
+    app.get('/diag/page/:bot_id', async (req: Request, res: Response) => {
+        const { bot_id } = req.params
+        const session = getSession(bot_id)
+        if (!session) {
+            res.status(404).json({
+                error: `no active session for bot_id=${bot_id}`,
+            })
+            return
+        }
+        try {
+            const result = await session.page.evaluate(() => {
+                const text = (document.body?.innerText || '').slice(0, 2500)
+                // Collect a few visible button texts so we can see what
+                // join CTAs (if any) the page is offering.
+                const buttons: string[] = []
+                document.querySelectorAll('button, [role="button"]').forEach(
+                    (b) => {
+                        const t = (b as HTMLElement).innerText?.trim()
+                        if (t && t.length > 0 && t.length < 80) buttons.push(t)
+                    },
+                )
+                return {
+                    url: window.location.href,
+                    title: document.title,
+                    readyState: document.readyState,
+                    bodyTextSnippet: text,
+                    visibleButtons: buttons.slice(0, 30),
+                }
+            })
+            res.status(200).json({ bot_id, ...result })
+        } catch (err) {
+            res.status(500).json({
+                error: err instanceof Error ? err.message : String(err),
+            })
+        }
+    })
+
     // Audio-injection diagnostics — reports ffmpeg subprocess state
     // (pid, killed) for the bot's AudioInject. Useful to confirm the
     // subprocess is alive and accepting bytes.
