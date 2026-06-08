@@ -152,12 +152,18 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     // Explicitly pass DISPLAY through Playwright's env option in case
     // chromium.launch doesn't inherit it from the parent process.
     //
-    // Reverted 2026-06-08 back to May-25 working configuration to A/B
-    // test whether the May-26 redirect-to-marketing-page failure was
-    // caused by my stealth flag changes or by an external (Google /
-    // Railway IP / room state) change.
+    // 2026-06-08: Diagnostic proved Google redirects Playwright-launched
+    // Chromium to workspace.google.com marketing page; incognito Chrome
+    // on the same URL reaches the pre-join screen. The 3 stealth-targeted
+    // additions below are the minimum required to bypass the redirect:
+    //   1) ignoreDefaultArgs strips --enable-automation
+    //   2) realistic macOS Chrome user-agent in newContext
+    //   3) addInitScript overrides navigator.webdriver to undefined
     const launchOpts: LaunchOptions = {
         headless: false,
+        // Strip Playwright's default --enable-automation flag, which is
+        // a known bot tell.
+        ignoreDefaultArgs: ['--enable-automation'],
         args: [
             '--no-sandbox',
             '--disable-blink-features=AutomationControlled',
@@ -176,10 +182,26 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     }
     const browser: Browser = await chromium.launch(launchOpts)
 
-    const context: BrowserContext = await browser.newContext()
+    const context: BrowserContext = await browser.newContext({
+        // Real macOS Chrome user-agent so Google's edge doesn't redirect
+        // us as a likely-bot user-agent. Matches the version pattern of
+        // an up-to-date Chrome on macOS.
+        userAgent:
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
+            'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+            'Chrome/131.0.0.0 Safari/537.36',
+    })
     // Grant mic + camera so Meet's pre-join screen doesn't prompt.
     await context.grantPermissions(['camera', 'microphone'], {
         origin: 'https://meet.google.com',
+    })
+
+    // Override navigator.webdriver to undefined BEFORE any site JS runs.
+    // This is the JS-level bot tell that Meet checks once the page loads.
+    await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined,
+        })
     })
 
     const page = await context.newPage()
