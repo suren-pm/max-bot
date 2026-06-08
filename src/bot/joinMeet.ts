@@ -285,6 +285,11 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
 
     const page = await context.newPage()
 
+    // setBypassCSP(true) — community-reported tweak from puppeteer-extra
+    // issue #334 that helps Meet's pre-join progress past the
+    // "You can't join this video call" error in Docker.
+    await page.setBypassCSP(true)
+
     if (params.onPageDeath) {
         wirePageDeath(page, params.onPageDeath)
     }
