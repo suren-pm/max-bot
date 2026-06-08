@@ -30,8 +30,18 @@ const { chromium } = require('playwright-extra') as {
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const StealthPlugin = require('puppeteer-extra-plugin-stealth')
+// Known-fix from puppeteer-extra discussion #907 / issue #334: Google Meet
+// specifically detects two stealth evasions and serves the "You can't join
+// this video call" error page when they're enabled. Disabling these two —
+// while keeping all the other ~18 evasions active — lets a guest reach
+// the real pre-join screen.
+const stealthInstance = StealthPlugin() as {
+    enabledEvasions: { delete: (name: string) => boolean }
+}
+stealthInstance.enabledEvasions.delete('iframe.contentWindow')
+stealthInstance.enabledEvasions.delete('media.codecs')
 ;(chromium as unknown as { use: (plugin: unknown) => void }).use(
-    StealthPlugin(),
+    stealthInstance,
 )
 
 // node 16+ has crypto.randomUUID(), but upstream's @types/node is pinned
