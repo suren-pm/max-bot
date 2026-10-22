@@ -23,6 +23,11 @@ jest.mock('playwright-extra', () => {
         locator: locatorMock,
         close: closePageMock,
         $$eval: $$evalMock,
+        // Real Playwright Page API, used by waitForAny/dismissMeetDialogs.
+        $: jest.fn(async () => ({
+            isVisible: async () => true,
+            click: async () => {},
+        })),
         evaluate: evaluateMock,
         title: titleMock,
         url: urlMock,

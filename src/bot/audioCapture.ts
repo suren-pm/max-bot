@@ -63,6 +63,27 @@ const BROWSER_SCRIPT = `
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         window.__maxBotAudio.audioContextCreated = true;
+        // Diagnostics added 2026-10-22 (Mac capture produced all-zero audio).
+        window.__maxBotAudio.audioContextState = audioCtx.state;
+        audioCtx.onstatechange = () => { window.__maxBotAudio.audioContextState = audioCtx.state; };
+        window.__maxBotAudio.peakLast = 0;
+        window.__maxBotAudio.peakMax = 0;
+        window.__maxBotAudio.nonZeroChunks = 0;
+        window.__maxBotAudio.tracks = [];
+        window.__maxBotAudio.mediaElements = [];
+        const __maxTrackRefs = [];
+        setInterval(() => {
+            try {
+                window.__maxBotAudio.audioContextState = audioCtx.state;
+                window.__maxBotAudio.route = window.__maxRoute ? JSON.parse(JSON.stringify(window.__maxRoute)) : null;
+                window.__maxBotAudio.tracks = __maxTrackRefs.map((t) => ({ id: t.id.slice(0, 8), muted: t.muted, enabled: t.enabled, readyState: t.readyState }));
+                window.__maxBotAudio.mediaElements = Array.from(document.querySelectorAll('audio,video')).map((el) => {
+                    const so = el.srcObject;
+                    const tr = so && so.getAudioTracks ? so.getAudioTracks() : [];
+                    return { tag: el.tagName, paused: el.paused, muted: el.muted, volume: el.volume, audioTracks: tr.map((t) => ({ id: t.id.slice(0, 8), muted: t.muted, readyState: t.readyState })) };
+                });
+            } catch (e) {}
+        }, 1000);
         const mixerDestination = audioCtx.createMediaStreamDestination();
         const mixedAudioSources = new Map();
         let mixedStreamProcessor = null;
@@ -127,6 +148,11 @@ const BROWSER_SCRIPT = `
                                 } else {
                                     frame.copyTo(audioData, { planeIndex: 0 });
                                 }
+                                let __pk = 0;
+                                for (let i = 0; i < numSamples; i++) { const a = audioData[i] < 0 ? -audioData[i] : audioData[i]; if (a > __pk) __pk = a; }
+                                window.__maxBotAudio.peakLast = __pk;
+                                if (__pk > window.__maxBotAudio.peakMax) window.__maxBotAudio.peakMax = __pk;
+                                if (__pk > 0) window.__maxBotAudio.nonZeroChunks++;
                                 if (typeof window.${CALLBACK_NAME} === 'function') {
                                     window.${CALLBACK_NAME}({
                                         audioData: Array.from(audioData),
@@ -181,7 +207,13 @@ const BROWSER_SCRIPT = `
 
         window.addEventListener('beforeunload', () => stopMixedStreamProcessor());
 
-        function connectTrackToMixer(track) {
+        function connectTrackToMixer(track, opts) {
+            // macOS: Max hears via the BlackHole loopback (macAudioRouting.ts);
+            // remote WebRTC tracks are silent there, so don't mix them in.
+            if (window.__maxLoopbackCapture && !(opts && opts.loopback)) {
+                window.__maxBotAudio.skippedRemote = (window.__maxBotAudio.skippedRemote || 0) + 1;
+                return;
+            }
             if (mixedAudioSources.has(track.id)) return;
             try {
                 if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -189,6 +221,7 @@ const BROWSER_SCRIPT = `
                 const source = audioCtx.createMediaStreamSource(stream);
                 source.connect(mixerDestination);
                 mixedAudioSources.set(track.id, source);
+                __maxTrackRefs.push(track);
                 window.__maxBotAudio.tracksConnected = mixedAudioSources.size;
                 console.log('${LOG_PREFIX} Connected track ' + track.id + ' (' + mixedAudioSources.size + ' total)');
                 if (mixedAudioSources.size === 1) {
@@ -204,6 +237,8 @@ const BROWSER_SCRIPT = `
                 window.__maxBotAudio.lastError = 'connectTrackToMixer: ' + e.message;
             }
         }
+
+        window.__maxConnectTrack = connectTrackToMixer;
 
         // Wrap RTCPeerConnection so we hook every audio track that arrives.
         try {

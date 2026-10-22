@@ -9,7 +9,7 @@
 
 import { WebSocket } from 'ws'
 
-import type { AudioInject } from './audioInject'
+import type { AudioInjector } from './audioInjector'
 import type { AudioStream } from './audioStream'
 
 export interface MaxBrainBridgeOptions {
@@ -17,7 +17,7 @@ export interface MaxBrainBridgeOptions {
     wsUrl: string
     botId: string
     audioStream: AudioStream
-    audioInject: AudioInject
+    audioInject: AudioInjector
     /** Force-reconnect if no message received from max-brain in this many ms.
      * Default 10000 (10s). */
     heartbeatStalenessMs?: number
@@ -30,7 +30,7 @@ export class MaxBrainBridge {
     private stopped = false
     private readonly fullUrl: string
     private readonly audioStream: AudioStream
-    private readonly audioInject: AudioInject
+    private readonly audioInject: AudioInjector
     private readonly onChunk: (buf: Buffer) => void
     private reconnectAttempts = 0
     private readonly maxReconnects = 5

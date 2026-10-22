@@ -16,6 +16,8 @@ import { WebSocketServer } from 'ws'
 
 import { attachAudioCapture } from './bot/audioCapture'
 import { AudioInject } from './bot/audioInject'
+import { InPageAudioInject } from './bot/audioInjectInPage'
+import { installMacAudioRouting } from './bot/macAudioRouting'
 import { AudioStream } from './bot/audioStream'
 import { joinMeet } from './bot/joinMeet'
 import { MaxBrainBridge } from './bot/maxBrainBridge'
@@ -217,12 +219,20 @@ export function createServerWithWs(): AppWithServer {
             const audioStream = new AudioStream({
                 srcSampleRate: SOURCE_SAMPLE_RATE_HINT,
                 dstSampleRate: OUTPUT_SAMPLE_RATE,
+                // macOS hears via the BlackHole loopback at full level (raw peak
+                // 0.968 measured 2026-10-22); the Linux 20x default clipped 3.2%
+                // of samples there. Linux keeps its default.
+                gain: process.platform === 'darwin' ? 1 : undefined,
             })
-            // Spawn the per-bot ffmpeg subprocess that pumps incoming
-            // /ws_in/:bot_id frames into the PulseAudio virtual_mic source.
-            const audioInject = new AudioInject({
-                sampleRate: OUTPUT_SAMPLE_RATE,
-            })
+            // Max's voice OUT. Linux: ffmpeg -> PulseAudio virtual_mic.
+            // macOS: in-page getUserMedia replacement (Phase 2, Option D):
+            // no OS driver, and Meet never opens the Mac's real microphone.
+            const useInPage =
+                process.platform === 'darwin' ||
+                process.env.MAX_INJECT_MODE === 'inpage'
+            const audioInject = useInPage
+                ? new InPageAudioInject({ sampleRate: OUTPUT_SAMPLE_RATE })
+                : new AudioInject({ sampleRate: OUTPUT_SAMPLE_RATE })
             // Set up audio capture inside joinMeet's onPageReady hook so
             // the RTCPeerConnection wrapper is in place BEFORE Meet's
             // JavaScript starts running. Without this, our wrap fires
@@ -232,6 +242,30 @@ export function createServerWithWs(): AppWithServer {
                 meeting_url,
                 bot_name,
                 onPageReady: async (page) => {
+                    // macOS: route Max's tab audio into BlackHole and hear the
+                    // meeting from it. Must register before inject + capture.
+                    if (process.platform === 'darwin') {
+                        try {
+                            await installMacAudioRouting(page)
+                        } catch (err) {
+                            // eslint-disable-next-line no-console
+                            console.warn(
+                                'mac audio routing failed (Max may echo and be deaf):',
+                                err instanceof Error ? err.message : String(err),
+                            )
+                        }
+                    }
+                    if (audioInject instanceof InPageAudioInject) {
+                        try {
+                            await audioInject.attach(page)
+                        } catch (err) {
+                            // eslint-disable-next-line no-console
+                            console.warn(
+                                'in-page audio inject attach failed (Max will be silent):',
+                                err instanceof Error ? err.message : String(err),
+                            )
+                        }
+                    }
                     try {
                         await attachAudioCapture(page, audioStream)
                     } catch (err) {
@@ -368,7 +402,7 @@ export function createServerWithWs(): AppWithServer {
     // Audio-injection diagnostics — reports ffmpeg subprocess state
     // (pid, killed) for the bot's AudioInject. Useful to confirm the
     // subprocess is alive and accepting bytes.
-    app.get('/diag/inject/:bot_id', (req: Request, res: Response) => {
+    app.get('/diag/inject/:bot_id', async (req: Request, res: Response) => {
         const session = getSession(req.params.bot_id)
         if (!session) {
             res.status(404).json({
@@ -377,8 +411,15 @@ export function createServerWithWs(): AppWithServer {
             return
         }
         const child = session.audioInject.child
+        const inject = session.audioInject
+        const inPage =
+            inject instanceof InPageAudioInject
+                ? { stats: inject.stats, page_state: await inject.getPageState() }
+                : null
         res.status(200).json({
             bot_id: req.params.bot_id,
+            mode: inPage ? 'in-page' : 'ffmpeg-pulse',
+            in_page: inPage,
             ffmpeg_pid: child?.pid ?? null,
             ffmpeg_killed: child?.killed ?? null,
             ffmpeg_exit_code: child?.exitCode ?? null,

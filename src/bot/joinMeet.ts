@@ -13,6 +13,8 @@
 // - src/meeting/meet.ts:847     isInWaitingRoom helper
 
 import * as crypto from 'crypto'
+import * as os from 'os'
+import * as path from 'path'
 import {
     BrowserContext,
     Page,
@@ -120,6 +122,65 @@ const JOIN_BUTTON_SELECTORS = [
     'button[aria-label*="Ask to join" i]',
 ]
 
+// macOS launch args: the exact set proven 2026-10-22 by
+// test-meet-join-chrome.js (signed-in profile, admitted to the meeting).
+// The Linux list below carries PulseAudio/Xvfb flags that don't apply here.
+const MAC_CHROME_ARGS = [
+    '--disable-blink-features=AutomationControlled',
+    '--use-fake-ui-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required',
+    // NOT '--mute-audio': it stops the speaker echo but also zeroes what
+    // Max hears (2026-10-22: 120 s captured, every second -120 dBFS while
+    // Suren talked). Echo is handled in-page instead.
+]
+
+// Meet shows modal nudges (camera prompt, sign-in prompt, Gemini notice)
+// whose scrim intercepts pointer events, so clicks on pre-join controls
+// silently fail. Same list as the proven test script.
+const DISMISS_SELECTORS = [
+    'button:has-text("Got it")',
+    'button:has-text("Dismiss")',
+    'button:has-text("No thanks")',
+    'button:has-text("Not now")',
+    'button:has-text("Continue without")',
+    'button[aria-label*="Close" i]',
+    'button[aria-label*="Dismiss" i]',
+]
+
+async function waitForAny(
+    page: Page,
+    selectors: string[],
+    timeoutMs: number,
+): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+        for (const sel of selectors) {
+            const el = await page.$(sel).catch(() => null)
+            if (el && (await el.isVisible().catch(() => false))) return true
+        }
+        await page.waitForTimeout(500)
+    }
+    return false
+}
+
+async function dismissMeetDialogs(page: Page): Promise<number> {
+    let n = 0
+    for (let pass = 0; pass < 3; pass++) {
+        for (const sel of DISMISS_SELECTORS) {
+            try {
+                const el = await page.$(sel)
+                if (!el) continue
+                await el.click({ timeout: 2000, force: true })
+                n++
+                await page.waitForTimeout(400)
+            } catch {
+                /* ignore */
+            }
+        }
+    }
+    return n
+}
+
 function isGoogleMeetUrl(url: string): boolean {
     try {
         const parsed = new URL(url)
@@ -193,7 +254,7 @@ async function clickJoinCta(page: Page): Promise<void> {
         const button = page.locator(selector).first()
         try {
             await button.waitFor({ state: 'visible', timeout: 5000 })
-            await button.click()
+            await button.click({ force: true })
             return
         } catch {
             // Try the next selector.
@@ -222,28 +283,52 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     //   3) full WebRTC + audio + certificate launch args
     //   4) permissions granted at launch (not after)
     //   5) ignoreHTTPSErrors + acceptDownloads
-    const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome'
+    const isMac = process.platform === 'darwin'
+    // Signed-in Google profile. Meet refuses automated anonymous guests
+    // (2026-10-22: 4 anonymous configs denied; signed-in
+    // dedicated Google account's profile admitted). Created BY HAND via
+    // setup-google-profile-chrome.js. Never commit this directory.
+    const profileDir =
+        process.env.MAX_BOT_PROFILE ||
+        path.join(os.homedir(), 'max-bot-profile')
+    // Real Google Chrome, not Playwright's bundled Chromium. CHROME_PATH
+    // overrides; macOS uses the installed Chrome; Linux image keeps its path.
+    const browserTarget: Record<string, unknown> = process.env.CHROME_PATH
+        ? { executablePath: process.env.CHROME_PATH }
+        : isMac
+          ? { channel: 'chrome' }
+          : { executablePath: '/usr/bin/google-chrome' }
     const context = (await (chromium as unknown as {
         launchPersistentContext: (
             userDataDir: string,
             opts: Record<string, unknown>,
         ) => Promise<BrowserContext>
-    }).launchPersistentContext('', {
+    }).launchPersistentContext(profileDir, {
         headless: false,
         viewport: { width: 1280, height: 720 },
-        executablePath: chromePath,
+        ...browserTarget,
         locale: 'en-US',
-        userAgent:
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
-            'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-            'Chrome/131.0.0.0 Safari/537.36',
-        permissions: ['microphone', 'camera'],
+        // Real Chrome reports its own UA. A stale spoof (Chrome/131 on a
+        // Chrome 155 binary) is itself a fingerprint mismatch.
+        ...(isMac
+            ? {}
+            : {
+                  userAgent:
+                      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
+                      'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+                      'Chrome/131.0.0.0 Safari/537.36',
+              }),
+        // macOS: microphone ONLY. Granting camera lets the bot open the
+        // Mac's real FaceTime camera. Max is audio-only by design.
+        permissions: isMac ? ['microphone'] : ['microphone', 'camera'],
         ignoreHTTPSErrors: true,
         acceptDownloads: true,
         bypassCSP: true,
         timeout: 120000,
         ignoreDefaultArgs: ['--enable-automation'],
-        args: [
+        args: isMac
+            ? MAC_CHROME_ARGS
+            : [
             '--window-size=1280,860',
             '--window-position=0,0',
             '--no-sandbox',
@@ -281,10 +366,13 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
             '--disable-default-apps',
             '--disable-features=MediaRouter',
         ],
-        env: {
-            ...process.env,
-            DISPLAY: process.env.DISPLAY ?? ':99',
-        } as NodeJS.ProcessEnv,
+        // DISPLAY=:99 is the Linux Xvfb screen; macOS uses its real display.
+        env: (isMac
+            ? { ...process.env }
+            : {
+                  ...process.env,
+                  DISPLAY: process.env.DISPLAY ?? ':99',
+              }) as NodeJS.ProcessEnv,
     })) as BrowserContext
 
     // Override navigator.webdriver + platform BEFORE any site JS runs.
@@ -351,14 +439,30 @@ export async function joinMeet(params: JoinMeetParams): Promise<JoinResult> {
     // Best-effort: log + continue if name input or join CTA aren't found.
     // We keep the session alive so /diag/page can inspect what Meet
     // actually displayed.
-    try {
-        await fillBotName(page, params.bot_name)
-    } catch (err) {
+    // Wait for the pre-join UI, clear any modal over it, then fill the name
+    // only if Meet asks for one. A signed-in profile joins under the
+    // account's own name and shows no name box.
+    await waitForAny(
+        page,
+        [...JOIN_BUTTON_SELECTORS, ...NAME_INPUT_SELECTORS],
+        20000,
+    )
+    const dismissed = await dismissMeetDialogs(page)
+    // eslint-disable-next-line no-console
+    console.log(`[joinMeet] dismissed ${dismissed} pre-join dialog(s)`)
+    if (await waitForAny(page, NAME_INPUT_SELECTORS, 3000)) {
+        try {
+            await fillBotName(page, params.bot_name)
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+                '[joinMeet] fillBotName best-effort failed:',
+                err instanceof Error ? err.message : String(err),
+            )
+        }
+    } else {
         // eslint-disable-next-line no-console
-        console.warn(
-            '[joinMeet] fillBotName best-effort failed:',
-            err instanceof Error ? err.message : String(err),
-        )
+        console.log('[joinMeet] no name box: joining as the signed-in account')
     }
     try {
         await clickJoinCta(page)
