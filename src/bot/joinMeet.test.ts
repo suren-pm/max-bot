@@ -8,6 +8,7 @@ jest.mock('playwright-extra', () => {
     const closePageMock = jest.fn(async () => {})
     const locatorFirstMock = jest.fn(() => ({
         waitFor: waitForMock,
+        isVisible: jest.fn(async () => true),
         fill: fillMock,
         click: clickMock,
     }))

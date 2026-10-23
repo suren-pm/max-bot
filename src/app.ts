@@ -20,6 +20,7 @@ import { InPageAudioInject } from './bot/audioInjectInPage'
 import { installMacAudioRouting } from './bot/macAudioRouting'
 import { AudioStream } from './bot/audioStream'
 import { joinMeet } from './bot/joinMeet'
+import { SessionWatch, watchSession } from './bot/sessionWatch'
 import { MaxBrainBridge } from './bot/maxBrainBridge'
 import {
     getAllSessions,
@@ -54,6 +55,190 @@ export interface AppWithServer {
     wss: WebSocketServer
 }
 
+// ── Join / leave (2026-10-23: rejoin after a crash, watchdog leave) ─────────
+
+// Rejoins allowed per join when Max's Chrome page dies unexpectedly.
+const MAX_REJOINS = 3
+// bot_ids being closed on purpose, so their page closing isn't a crash.
+const intentionalLeaves = new Set<string>()
+
+interface StartOptions {
+    meeting_url: string
+    bot_name: string
+    /** Scheduled joins leave at this time; null = no time limit. */
+    leaveAt: Date | null
+    rejoinsLeft: number
+}
+
+async function startSession(opts: StartOptions): Promise<string> {
+    const { meeting_url, bot_name } = opts
+    const audioStream = new AudioStream({
+        srcSampleRate: SOURCE_SAMPLE_RATE_HINT,
+        dstSampleRate: OUTPUT_SAMPLE_RATE,
+        // macOS hears via the BlackHole loopback at full level (raw peak
+        // 0.968 measured 2026-10-22); the Linux 20x default clipped 3.2%
+        // of samples there. Linux keeps its default.
+        gain: process.platform === 'darwin' ? 1 : undefined,
+    })
+    // Max's voice OUT. Linux: ffmpeg -> PulseAudio virtual_mic.
+    // macOS: in-page getUserMedia replacement (Phase 2, Option D):
+    // no OS driver, and Meet never opens the Mac's real microphone.
+    const useInPage =
+        process.platform === 'darwin' ||
+        process.env.MAX_INJECT_MODE === 'inpage'
+    const audioInject = useInPage
+        ? new InPageAudioInject({ sampleRate: OUTPUT_SAMPLE_RATE })
+        : new AudioInject({ sampleRate: OUTPUT_SAMPLE_RATE })
+    // Set up audio capture inside joinMeet's onPageReady hook so
+    // the RTCPeerConnection wrapper is in place BEFORE Meet's
+    // JavaScript starts running. Without this, our wrap fires
+    // too late and the audio tracks bypass our mixer.
+    let resolvedBotId: string | null = null
+    const { bot_id, page, close } = await joinMeet({
+        meeting_url,
+        bot_name,
+        onPageReady: async (page) => {
+            // macOS: route Max's tab audio into BlackHole and hear the
+            // meeting from it. Must register before inject + capture.
+            if (process.platform === 'darwin') {
+                try {
+                    await installMacAudioRouting(page)
+                } catch (err) {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                        'mac audio routing failed (Max may echo and be deaf):',
+                        err instanceof Error ? err.message : String(err),
+                    )
+                }
+            }
+            if (audioInject instanceof InPageAudioInject) {
+                try {
+                    await audioInject.attach(page)
+                } catch (err) {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                        'in-page audio inject attach failed (Max will be silent):',
+                        err instanceof Error ? err.message : String(err),
+                    )
+                }
+            }
+            try {
+                await attachAudioCapture(page, audioStream)
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(
+                    'attachAudioCapture failed (continuing without audio):',
+                    err instanceof Error ? err.message : String(err),
+                )
+            }
+        },
+        onPageDeath: (event) => {
+            // A deliberate leave (/leave or the watchdog) is not a crash.
+            if (resolvedBotId && intentionalLeaves.delete(resolvedBotId)) return
+            // eslint-disable-next-line no-console
+            console.warn(
+                `[page death] bot=${resolvedBotId ?? '?'} reason=${event.reason}`,
+            )
+            recordPostmortem({
+                kind: 'playwright_page',
+                pid: null,
+                exitCode: null,
+                signal: event.reason,
+                stderrTail: `Playwright page emitted ${event.reason}`,
+            })
+            // Auto-cleanup: trigger session.close() asynchronously.
+            const dead = resolvedBotId
+                ? getSession(resolvedBotId)
+                : undefined
+            if (dead) {
+                dead.close().catch(() => {})
+                removeSession(resolvedBotId!)
+            }
+            // 2026-10-23: rejoin when Max's Chrome page dies unexpectedly
+            // (crash or window closed), within the join's time window.
+            if (!resolvedBotId) return
+            const late = opts.leaveAt && Date.now() >= opts.leaveAt.getTime()
+            if (opts.rejoinsLeft <= 0 || late) {
+                console.warn(`[rejoin] not rejoining (rejoins left: ${opts.rejoinsLeft}, past time limit: ${!!late})`)
+                return
+            }
+            console.warn(`[rejoin] rejoining in 5 s (${opts.rejoinsLeft - 1} rejoins left after this)`)
+            setTimeout(() => {
+                if (hasActiveSession()) return // someone already started a new one
+                startSession({ ...opts, rejoinsLeft: opts.rejoinsLeft - 1 }).catch((err) =>
+                    console.warn('[rejoin] failed:', err instanceof Error ? err.message : String(err)),
+                )
+            }, 5000)
+        },
+    })
+    resolvedBotId = bot_id
+    // Open the outbound WebSocket to max-brain. When
+    // MAX_BRAIN_WS_URL is unset (local dev), bridge harmlessly
+    // attempts ws://localhost:0/${bot_id} and stays disconnected;
+    // does not affect the rest of the /join flow.
+    const maxBrainWsUrl =
+        process.env.MAX_BRAIN_WS_URL ?? 'ws://localhost:0'
+    const maxBrainBridge = new MaxBrainBridge({
+        wsUrl: maxBrainWsUrl,
+        botId: bot_id,
+        audioStream,
+        audioInject,
+    })
+    let watch: SessionWatch | null = null
+    registerSession({
+        bot_id,
+        meeting_url,
+        bot_name,
+        startedAt: new Date(),
+        audioStream,
+        audioInject,
+        maxBrainBridge,
+        page,
+        close: async () => {
+            watch?.stop()
+            maxBrainBridge.stop()
+            audioStream.stop()
+            audioInject.stop()
+            await close()
+        },
+    })
+    // Leave once everyone else has gone, or at the scheduled time limit.
+    watch = watchSession({
+        page,
+        leaveAt: opts.leaveAt,
+        onLeave: (reason) => void leaveSession(bot_id, reason),
+    })
+    return bot_id
+}
+
+/** Close a session on purpose (/leave, or the watchdog). */
+export async function leaveSession(
+    bot_id: string,
+    why: string,
+): Promise<{ found: boolean; timedOut: boolean }> {
+    const session = getSession(bot_id)
+    if (!session) return { found: false, timedOut: false }
+    intentionalLeaves.add(bot_id)
+    // eslint-disable-next-line no-console
+    console.log(`[leave] bot=${bot_id} reason=${why}`)
+    // Wrap close() in a 15s timeout. If Playwright/Chromium hangs,
+    // we still respond cleanly and let the next /join replace state.
+    const result = await withTimeout(session.close(), 15000, `leave/${bot_id}`)
+    removeSession(bot_id)
+    if (result.timedOut) {
+        recordPostmortem({
+            kind: 'playwright_page',
+            pid: null,
+            exitCode: null,
+            signal: 'LEAVE_TIMEOUT',
+            stderrTail: `/leave/${bot_id} cleanup exceeded 15s — session removed from registry, child processes may be lingering`,
+        })
+        // eslint-disable-next-line no-console
+        console.warn(`/leave/${bot_id}: close() exceeded 15s, forcing`)
+    }
+    return { found: true, timedOut: result.timedOut }
+}
+
 export function createServer(): Application {
     const { app } = createServerWithWs()
     return app
@@ -64,6 +249,19 @@ export function createServerWithWs(): AppWithServer {
     app.use(express.json())
 
     app.get('/health', (_req: Request, res: Response) => {
+        // macOS (2026-10-23): no Xvfb or PulseAudio there. Real Chrome and the
+        // BlackHole routing are checked when Max joins, so the service being up
+        // is the health signal.
+        if (process.platform === 'darwin') {
+            res.status(200).json({
+                status: 'ok',
+                service: 'max-bot',
+                version: VERSION,
+                platform: 'darwin',
+                sessions: getAllSessions().length,
+            })
+            return
+        }
         const checks = {
             xvfb: false,
             pulse: false,
@@ -215,119 +413,17 @@ export function createServerWithWs(): AppWithServer {
             return
         }
 
+        const maxMinutes = Number((req.body ?? {}).max_minutes)
+        const leaveAt =
+            maxMinutes > 0 ? new Date(Date.now() + maxMinutes * 60_000) : null
         try {
-            const audioStream = new AudioStream({
-                srcSampleRate: SOURCE_SAMPLE_RATE_HINT,
-                dstSampleRate: OUTPUT_SAMPLE_RATE,
-                // macOS hears via the BlackHole loopback at full level (raw peak
-                // 0.968 measured 2026-10-22); the Linux 20x default clipped 3.2%
-                // of samples there. Linux keeps its default.
-                gain: process.platform === 'darwin' ? 1 : undefined,
-            })
-            // Max's voice OUT. Linux: ffmpeg -> PulseAudio virtual_mic.
-            // macOS: in-page getUserMedia replacement (Phase 2, Option D):
-            // no OS driver, and Meet never opens the Mac's real microphone.
-            const useInPage =
-                process.platform === 'darwin' ||
-                process.env.MAX_INJECT_MODE === 'inpage'
-            const audioInject = useInPage
-                ? new InPageAudioInject({ sampleRate: OUTPUT_SAMPLE_RATE })
-                : new AudioInject({ sampleRate: OUTPUT_SAMPLE_RATE })
-            // Set up audio capture inside joinMeet's onPageReady hook so
-            // the RTCPeerConnection wrapper is in place BEFORE Meet's
-            // JavaScript starts running. Without this, our wrap fires
-            // too late and the audio tracks bypass our mixer.
-            let resolvedBotId: string | null = null
-            const { bot_id, page, close } = await joinMeet({
+            const bot_id = await startSession({
                 meeting_url,
                 bot_name,
-                onPageReady: async (page) => {
-                    // macOS: route Max's tab audio into BlackHole and hear the
-                    // meeting from it. Must register before inject + capture.
-                    if (process.platform === 'darwin') {
-                        try {
-                            await installMacAudioRouting(page)
-                        } catch (err) {
-                            // eslint-disable-next-line no-console
-                            console.warn(
-                                'mac audio routing failed (Max may echo and be deaf):',
-                                err instanceof Error ? err.message : String(err),
-                            )
-                        }
-                    }
-                    if (audioInject instanceof InPageAudioInject) {
-                        try {
-                            await audioInject.attach(page)
-                        } catch (err) {
-                            // eslint-disable-next-line no-console
-                            console.warn(
-                                'in-page audio inject attach failed (Max will be silent):',
-                                err instanceof Error ? err.message : String(err),
-                            )
-                        }
-                    }
-                    try {
-                        await attachAudioCapture(page, audioStream)
-                    } catch (err) {
-                        // eslint-disable-next-line no-console
-                        console.warn(
-                            'attachAudioCapture failed (continuing without audio):',
-                            err instanceof Error ? err.message : String(err),
-                        )
-                    }
-                },
-                onPageDeath: (event) => {
-                    // eslint-disable-next-line no-console
-                    console.warn(
-                        `[page death] bot=${resolvedBotId ?? '?'} reason=${event.reason}`,
-                    )
-                    recordPostmortem({
-                        kind: 'playwright_page',
-                        pid: null,
-                        exitCode: null,
-                        signal: event.reason,
-                        stderrTail: `Playwright page emitted ${event.reason}`,
-                    })
-                    // Auto-cleanup: trigger session.close() asynchronously.
-                    const dead = resolvedBotId
-                        ? getSession(resolvedBotId)
-                        : undefined
-                    if (dead) {
-                        dead.close().catch(() => {})
-                        removeSession(resolvedBotId!)
-                    }
-                },
+                leaveAt,
+                rejoinsLeft: MAX_REJOINS,
             })
-            resolvedBotId = bot_id
-            // Open the outbound WebSocket to max-brain. When
-            // MAX_BRAIN_WS_URL is unset (local dev), bridge harmlessly
-            // attempts ws://localhost:0/${bot_id} and stays disconnected;
-            // does not affect the rest of the /join flow.
-            const maxBrainWsUrl =
-                process.env.MAX_BRAIN_WS_URL ?? 'ws://localhost:0'
-            const maxBrainBridge = new MaxBrainBridge({
-                wsUrl: maxBrainWsUrl,
-                botId: bot_id,
-                audioStream,
-                audioInject,
-            })
-            registerSession({
-                bot_id,
-                meeting_url,
-                bot_name,
-                startedAt: new Date(),
-                audioStream,
-                audioInject,
-                maxBrainBridge,
-                page,
-                close: async () => {
-                    maxBrainBridge.stop()
-                    audioStream.stop()
-                    audioInject.stop()
-                    await close()
-                },
-            })
-            res.status(200).json({ bot_id })
+            res.status(200).json({ bot_id, leave_at: leaveAt?.toISOString() ?? null })
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             res.status(500).json({ error: message })
@@ -534,31 +630,12 @@ export function createServerWithWs(): AppWithServer {
     })
     app.post('/leave/:bot_id', async (req: Request, res: Response) => {
         const { bot_id } = req.params
-        const session = getSession(bot_id)
-        if (!session) {
+        const result = await leaveSession(bot_id, 'leave_request')
+        if (!result.found) {
             res.status(404).json({
                 error: `no active session for bot_id=${bot_id}`,
             })
             return
-        }
-        // Wrap close() in a 15s timeout. If Playwright/Chromium hangs,
-        // we still respond cleanly and let the next /join replace state.
-        const result = await withTimeout(
-            session.close(),
-            15000,
-            `leave/${bot_id}`,
-        )
-        removeSession(bot_id)
-        if (result.timedOut) {
-            recordPostmortem({
-                kind: 'playwright_page',
-                pid: null,
-                exitCode: null,
-                signal: 'LEAVE_TIMEOUT',
-                stderrTail: `/leave/${bot_id} cleanup exceeded 15s — session removed from registry, child processes may be lingering`,
-            })
-            // eslint-disable-next-line no-console
-            console.warn(`/leave/${bot_id}: close() exceeded 15s, forcing`)
         }
         res.status(200).json({
             ok: true,

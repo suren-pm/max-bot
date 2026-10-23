@@ -120,6 +120,9 @@ const JOIN_BUTTON_SELECTORS = [
     'span:has-text("Ask to join")',
     'button[aria-label*="join now" i]',
     'button[aria-label*="Ask to join" i]',
+    // 2026-10-23: after Max's Chrome dies, Meet still thinks he's in the call
+    // and offers only "Switch here" (moves the call here and drops the ghost).
+    'button:has-text("Switch here")',
 ]
 
 // macOS launch args: the exact set proven 2026-10-22 by
@@ -249,16 +252,21 @@ async function fillBotName(page: Page, bot_name: string): Promise<void> {
     )
 }
 
-async function clickJoinCta(page: Page): Promise<void> {
-    for (const selector of JOIN_BUTTON_SELECTORS) {
-        const button = page.locator(selector).first()
-        try {
-            await button.waitFor({ state: 'visible', timeout: 5000 })
-            await button.click({ force: true })
-            return
-        } catch {
-            // Try the next selector.
+// Polls all join buttons together (2026-10-23) instead of waiting 5 s on each
+// in turn, so whichever one Meet shows is clicked as soon as it appears.
+async function clickJoinCta(page: Page, timeoutMs = 25000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+        for (const selector of JOIN_BUTTON_SELECTORS) {
+            const button = page.locator(selector).first()
+            if (await button.isVisible().catch(() => false)) {
+                await button.click({ force: true })
+                // eslint-disable-next-line no-console
+                console.log(`[joinMeet] clicked ${selector}`)
+                return
+            }
         }
+        await new Promise((r) => setTimeout(r, 400))
     }
     throw new Error(
         'Could not find the "Ask to join" / "Join now" button on Google Meet',

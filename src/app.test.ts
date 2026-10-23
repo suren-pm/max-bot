@@ -60,6 +60,12 @@ describe('max-bot HTTP server', () => {
                 service: 'max-bot',
             })
             expect(typeof res.body.version).toBe('string')
+            if (process.platform === 'darwin') {
+                // macOS self-host (2026-10-23): up means healthy.
+                expect(res.status).toBe(200)
+                expect(res.body.sessions).toBe(0)
+                return
+            }
             expect(res.body.checks).toBeDefined()
             expect(typeof res.body.checks.xvfb).toBe('boolean')
             expect(typeof res.body.checks.pulse).toBe('boolean')
@@ -152,6 +158,67 @@ describe('max-bot HTTP server', () => {
             })
             const callArg = joinSpy.mock.calls[0][0]
             expect(typeof callArg.onPageDeath).toBe('function')
+        })
+
+        // 2026-10-23: rejoin after an unexpected page death, not after /leave.
+        const flush = () => new Promise((r) => jest.requireActual('timers').setImmediate(r))
+
+        it('rejoins the same meeting after an unexpected page death', async () => {
+            const joinSpy = jest.spyOn(joinMeetModule, 'joinMeet')
+                .mockResolvedValueOnce({ bot_id: 'first', page: {} as never, close: jest.fn(async () => {}) })
+                .mockResolvedValueOnce({ bot_id: 'second', page: {} as never, close: jest.fn(async () => {}) })
+            const app = createServer()
+            await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            jest.useFakeTimers()
+            try {
+                joinSpy.mock.calls[0][0].onPageDeath!({ reason: 'page_closed' })
+                jest.advanceTimersByTime(5000)
+            } finally {
+                jest.useRealTimers()
+            }
+            await flush()
+            expect(joinSpy).toHaveBeenCalledTimes(2)
+            expect(joinSpy.mock.calls[1][0].meeting_url).toBe('https://meet.google.com/abc-defg-hij')
+        })
+
+        it('does not rejoin after a deliberate /leave', async () => {
+            let death: ((e: { reason: 'page_closed' }) => void) | undefined
+            const joinSpy = jest.spyOn(joinMeetModule, 'joinMeet').mockImplementation(async (opts) => {
+                death = opts.onPageDeath as typeof death
+                return {
+                    bot_id: 'leaver',
+                    page: {} as never,
+                    // closing the page fires the page-death event, as in Chrome
+                    close: jest.fn(async () => death!({ reason: 'page_closed' })),
+                }
+            })
+            const app = createServer()
+            await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+            })
+            expect((await request(app).post('/leave/leaver')).status).toBe(200)
+            await new Promise((r) => setTimeout(r, 5500)) // past the 5 s rejoin delay
+            expect(joinSpy).toHaveBeenCalledTimes(1)
+        }, 10000)
+
+        it('returns leave_at when max_minutes is given', async () => {
+            jest.spyOn(joinMeetModule, 'joinMeet').mockResolvedValue({
+                bot_id: 'timed', page: {} as never, close: jest.fn(async () => {}),
+            })
+            const app = createServer()
+            const before = Date.now()
+            const res = await request(app).post('/join').send({
+                meeting_url: 'https://meet.google.com/abc-defg-hij',
+                bot_name: 'Max',
+                max_minutes: 45,
+            })
+            const leaveAt = Date.parse(res.body.leave_at)
+            expect(leaveAt - before).toBeGreaterThanOrEqual(45 * 60_000)
+            expect(leaveAt - before).toBeLessThan(45 * 60_000 + 5000)
         })
     })
 
